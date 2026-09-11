@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Test feed</title>
+    <link>https://example.com</link>
+    <item>
+      <title>Первая новость</title>
+      <link>https://example.com/1</link>
+      <guid>guid-1</guid>
+      <pubDate>Tue, 01 Sep 2026 10:00:00 +0000</pubDate>
+      <description>Краткое описание первой новости</description>
+      <enclosure url="https://example.com/img1.jpg" type="image/jpeg" length="1234"/>
+    </item>
+    <item>
+      <title>Вторая новость</title>
+      <link>https://example.com/2</link>
+      <guid>guid-2</guid>
+      <pubDate>Tue, 01 Sep 2026 11:00:00 +0000</pubDate>
+      <description>Краткое описание второй новости</description>
+      <media:content url="https://example.com/img2.png" type="image/png"/>
+    </item>
+  </channel>
+</rss>

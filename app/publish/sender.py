@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+
+from aiogram import Bot
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+)
+from aiogram.types import FSInputFile, InlineKeyboardMarkup, InputMediaPhoto, Message
+
+from app.config import Settings
+from app.textutil import plain_text
+
+log = logging.getLogger("sender")
+
+
+def parse_chat_id(value: str) -> str | int:
+    value = value.strip()
+    if value.lstrip("-").isdigit():
+        return int(value)
+    return value
+
+
+class TelegramSender:
+    """Publishing and moderation messaging via aiogram."""
+
+    def __init__(self, bot: Bot, cfg: Settings) -> None:
+        self._bot = bot
+        self._cfg = cfg
+        self._channel = parse_chat_id(cfg.telegram.channel_id)
+        raw = cfg.telegram.channel_id.strip()
+        self._public_username: str | None = raw.lstrip("@") if raw.startswith("@") else None
+        self._admin = cfg.telegram.admin_id
+
+    async def send_to_channel(self, text: str, photos: list[str]) -> tuple[int, str | None]:
+        paths = [p for p in photos if p and Path(p).exists()]
+        if paths:
+            message_id = await self._send_with_photos(self._channel, text, paths)
+        else:
+            message_id = await self._send_text(self._channel, text)
+        tg_url = None
+        if self._public_username:
+            tg_url = f"https://t.me/{self._public_username}/{message_id}"
+        return message_id, tg_url
+
+    async def send_moderation_draft(self, text: str, photos: list[str], keyboard: InlineKeyboardMarkup) -> Message:
+        paths = [p for p in photos if p and Path(p).exists()]
+        if paths:
+            try:
+                await self._send_with_photos(self._admin, "", paths)
+            except Exception:
+                log.exception("failed to send draft photos to admin")
+        return await self._send_text(self._admin, text, keyboard=keyboard)
+
+    async def send_admin_text(self, text: str) -> Message:
+        return await self._send_text(self._admin, text)
+
+    async def edit_message(self, chat_id, message_id: int, text: str) -> None:
+        try:
+            await self._call(
+                self._bot.edit_message_text,
+                chat_id=chat_id, message_id=message_id, text=text, parse_mode="HTML",
+            )
+        except TelegramBadRequest as exc:
+            if "parse" not in str(exc).lower():
+                raise
+            await self._call(self._bot.edit_message_text, chat_id=chat_id, message_id=message_id, text=plain_text(text))
+
+    async def _send_text(self, chat_id, text: str, keyboard: InlineKeyboardMarkup | None = None) -> Message:
+        try:
+            return await self._call(
+                self._bot.send_message, chat_id=chat_id, text=text, parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+        except TelegramBadRequest as exc:
+            if "parse" not in str(exc).lower():
+                raise
+            return await self._call(self._bot.send_message, chat_id=chat_id, text=text, reply_markup=keyboard)
+
+    async def _send_with_photos(self, chat_id, caption: str, paths: list[str]) -> int:
+        if len(paths) == 1:
+            try:
+                message = await self._call(
+                    self._bot.send_photo,
+                    chat_id=chat_id,
+                    photo=FSInputFile(paths[0]),
+                    caption=caption or None,
+                    parse_mode="HTML" if caption else None,
+                )
+                return message.message_id
+            except TelegramBadRequest as exc:
+                if "parse" not in str(exc).lower():
+                    raise
+                message = await self._call(
+                    self._bot.send_photo,
+                    chat_id=chat_id,
+                    photo=FSInputFile(paths[0]),
+                    caption=plain_text(caption) if caption else None,
+                )
+                return message.message_id
+        media = [
+            InputMediaPhoto(
+                media=FSInputFile(path),
+                caption=caption if index == 0 else None,
+                parse_mode="HTML" if index == 0 and caption else None,
+            )
+            for index, path in enumerate(paths)
+        ]
+        try:
+            messages = await self._call(self._bot.send_media_group, chat_id=chat_id, media=media)
+            return messages[0].message_id
+        except TelegramBadRequest as exc:
+            if "parse" not in str(exc).lower():
+                raise
+            media[0].caption = plain_text(caption)
+            media[0].parse_mode = None
+            messages = await self._call(self._bot.send_media_group, chat_id=chat_id, media=media)
+            return messages[0].message_id
+
+    async def _call(self, method, **kwargs):
+        delay = 1.0
+        for attempt in range(4):
+            try:
+                return await method(**kwargs)
+            except TelegramRetryAfter as exc:
+                await asyncio.sleep(float(exc.retry_after) + 1.0)
+            except (TelegramNetworkError, TimeoutError):
+                if attempt == 3:
+                    raise
+                log.warning("telegram network error, retrying in %.1fs", delay)
+                await asyncio.sleep(delay)
+                delay *= 2
+        raise RuntimeError("telegram retries exhausted")

@@ -1,0 +1,74 @@
+# Example configuration for news-pilot.
+# Copy to config.yaml and edit. Secrets are usually provided via .env:
+#   LLM__API_KEY=..., TAVILY__API_KEY=..., TELEGRAM__BOT_TOKEN=..., DATABASE__DSN=...
+
+log_level: INFO
+data_dir: data
+
+llm:
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-mini"   # vision-capable
+  temperature: 0.4
+  timeout_seconds: 120
+  retries: 3
+  # api_key: set in .env (LLM__API_KEY)
+
+embeddings:
+  base_url: "http://localhost:11434"   # Ollama
+  model: "nomic-embed-text"
+  dimensions: 768
+  max_chars: 6000
+
+rss:
+  poll_interval_seconds: 300
+  feeds:
+    - name: "lenta"
+      url: "https://lenta.ru/rss"
+    - name: "ria"
+      url: "https://ria.ru/export/rss2/index.xml"
+    # - name: "emulator"
+    #   url: "http://host.docker.internal:8080/rss"
+
+fetcher:
+  timeout_seconds: 30
+  retries: 2
+  min_text_length: 100
+
+database:
+  dsn: "postgresql+asyncpg://news:news@localhost:5432/news"
+
+tavily:
+  # api_key: set in .env (TAVILY__API_KEY)
+  timeout_seconds: 30
+  retries: 3
+
+telegram:
+  # bot_token: set in .env (TELEGRAM__BOT_TOKEN)
+  channel_id: "@channel"
+  admin_id: 123456
+
+dedup:
+  window_days: 3
+  min_similarity: 0.75
+  top_k: 5
+  on_error: review
+
+photo_agent:
+  max_iterations: 10
+  max_searches: 5
+  max_images: 4
+
+context:
+  window_days: 14
+  top_k: 3
+  min_similarity: 0.7
+
+publish:
+  mode: moderation        # auto | moderation
+  max_per_hour: 5
+  quiet_hours: "01:00-07:00"
+  timezone: "UTC"
+  moderation_timeout_hours: 24
+
+pipeline:
+  workers: 2
