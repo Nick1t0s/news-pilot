@@ -158,13 +158,7 @@ class TelegramSender:
             )
             return messages[0].message_id
 
-
-def _input_file(data: bytes, index: int) -> BufferedInputFile:
-    fmt = sniff_image_format(data) or "jpg"
-    return BufferedInputFile(data, filename=f"photo_{index}.{fmt}")
-
-
-async def _call(self, method, **kwargs):
+    async def _call(self, method, **kwargs):
         delay = 1.0
         for attempt in range(4):
             try:
@@ -178,3 +172,8 @@ async def _call(self, method, **kwargs):
                 await asyncio.sleep(delay)
                 delay *= 2
         raise RuntimeError("telegram retries exhausted")
+
+
+def _input_file(data: bytes, index: int) -> BufferedInputFile:
+    fmt = sniff_image_format(data) or "jpg"
+    return BufferedInputFile(data, filename=f"photo_{index}.{fmt}")
