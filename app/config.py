@@ -151,7 +151,7 @@ class Settings(BaseSettings):
         return (
             init_settings,
             env_settings,
-            dotenv_settings,
+            _FilteredDotenvSource(settings_cls, dotenv_settings),
             yaml_source,
             file_secret_settings,
         )
@@ -159,9 +159,36 @@ class Settings(BaseSettings):
 
 def _yaml_file_path(settings_cls: type[BaseSettings]) -> Path | None:
     raw = os.environ.get("CONFIG")
+    if raw is None:
+        # CONFIG may live in .env, which is not exported to the environment
+        env_file = Path(os.environ.get("ENV_FILE", ".env"))
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                name, _, value = line.partition("=")
+                if name.strip() == "CONFIG":
+                    raw = value.strip()
+                    break
     if raw:
         return Path(raw)
     return None
+
+
+class _FilteredDotenvSource(PydanticBaseSettingsSource):
+    """Dotenv source that drops keys unknown to the model (e.g. CONFIG, TEST_DSN)."""
+
+    def __init__(self, settings_cls: type[BaseSettings], inner: PydanticBaseSettingsSource) -> None:
+        super().__init__(settings_cls)
+        self._inner = inner
+
+    def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
+        return self._inner.get_field_value(field, field_name)
+
+    def __call__(self) -> dict[str, Any]:
+        data = self._inner() or {}
+        return {k: v for k, v in data.items() if k in self.settings_cls.model_fields}
 
 
 class _YamlFileSource(PydanticBaseSettingsSource):
