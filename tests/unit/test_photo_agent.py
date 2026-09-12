@@ -18,7 +18,7 @@ def make_agent(llm: FakeLLM, tavily) -> PhotoAgent:
     from app.config import Settings
 
     cfg = Settings(_env_file=None)
-    return PhotoAgent(cfg, llm, tavily, http=None, images_dir=SimpleNamespace())
+    return PhotoAgent(cfg, llm, tavily, http=None)
 
 
 def make_tavily(results: list[str]):
@@ -75,26 +75,24 @@ async def test_collect_swallows_crash_and_returns_empty() -> None:
     assert result == []
 
 
-async def test_select_downloads_chosen_images(tmp_path, monkeypatch) -> None:
+async def test_select_downloads_chosen_images(monkeypatch) -> None:
     downloaded: list[str] = []
 
-    async def fake_download(http, url, dest_dir, *, base_name, timeout=20.0, retries=2):
+    async def fake_download(http, url, *, timeout=20.0, retries=2):
         downloaded.append(url)
-        path = tmp_path / f"{base_name}.jpg"
-        path.write_bytes(b"stub")
-        return path
+        return b"stub-bytes"
 
     monkeypatch.setattr("app.photo.agent.download_image", fake_download)
     llm = FakeLLM()
     llm.push_chat(completion(None, [tool_call("t1", "tavily_image_search", {"query": "дрон"})]))
     llm.push_chat(completion(None, [tool_call("t2", "select_images", {"ids": ["img_0"]})]))
     agent = make_agent(llm, make_tavily(results=["https://example.com/img.jpg"]))
-    agent._images_dir = tmp_path
 
     result = await agent._collect_inner(make_news())
 
     assert downloaded == ["https://example.com/img.jpg"]
     assert result and result[0].source_url == "https://example.com/img.jpg"
+    assert result[0].data == b"stub-bytes"
 
 
 async def test_search_limit_is_respected() -> None:

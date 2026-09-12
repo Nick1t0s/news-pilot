@@ -11,30 +11,36 @@ from app.bot.keyboards import moderation_keyboard
 from app.config import Settings
 from app.db import repo
 from app.db.entities import News, NewsStatus, Post, PostStatus
+from app.photo.downloader import download_image
 from app.providers.embeddings import EmbeddingProvider
 from app.textutil import plain_text
 
 log = logging.getLogger("publish")
 
+PhotoData = tuple[str, bytes]
+
 
 class PublishService:
     """Creates post drafts, publishes via queue worker, handles moderation."""
 
-    def __init__(self, cfg: Settings, pool: asyncpg.Pool, sender, embeddings: EmbeddingProvider) -> None:
+    def __init__(self, cfg: Settings, pool: asyncpg.Pool, sender, embeddings: EmbeddingProvider, http) -> None:
         self._cfg = cfg
         self._pool = pool
         self._sender = sender
         self._embeddings = embeddings
+        self._http = http
         self.queue: asyncio.Queue[int] = asyncio.Queue()
         self._admin_msgs: dict[int, tuple[int | None, int]] = {}
         self._post_retries: dict[int, int] = {}
+        self._photos: dict[int, list[PhotoData]] = {}
 
     async def submit(self, news: News, draft, photos: list, note: str | None = None) -> None:
         post_id = await repo.insert_post(self._pool, news.id, draft.text, self._initial_status())
-        await repo.add_post_images(
-            self._pool, post_id,
-            [(photo.source_url, photo.local_path) for photo in photos],
-        )
+        photo_data: list[PhotoData] = [
+            (photo.source_url, photo.data) for photo in photos if photo.data
+        ]
+        self._photos[post_id] = photo_data
+        await repo.add_post_images(self._pool, post_id, [url for url, _ in photo_data])
         await repo.add_post_references(self._pool, post_id, list(getattr(draft, "reference_ids", []) or []))
         await repo.log_stage(
             self._pool, news.id, "publish", "info",
@@ -65,18 +71,17 @@ class PublishService:
             tg_url = post.tg_url
             photos_count = 0
         else:
-            images = await repo.get_post_images(self._pool, post_id)
-            local_paths = [] if drop_photos else [image.local_path for image in images if image.local_path]
-            photos_count = len(local_paths)
+            photos = [] if drop_photos else await self._photos_for_send(post_id)
+            photos_count = len(photos)
             reply_to = await self._resolve_reply_target(post_id)
             text = await self._text_with_source(post)
-            message_id, tg_url = await self._sender.send_to_channel(text, local_paths, reply_to=reply_to)
+            message_id, tg_url = await self._sender.send_to_channel(text, photos, reply_to=reply_to)
             await repo.set_post_tg_message(self._pool, post_id, message_id, tg_url)
         embedding = await self._safe_embed(post.text)
         await repo.update_post_published(
             self._pool, post_id, tg_message_id=message_id, tg_url=tg_url, embedding=embedding,
         )
-        note = " without photos" if drop_photos else ""
+        note = " without photos" if drop_photos or (photos_count == 0 and not drop_photos) else ""
         await repo.set_news_status(
             self._pool, post.news_id, NewsStatus.published,
             stage="publish", message=f"published{note} {tg_url or message_id}",
@@ -84,8 +89,33 @@ class PublishService:
         if self._cfg.publish.mode == "auto" and self._cfg.publish.notify_admin:
             await self._notify_admin_published(post_id, tg_url or message_id)
         self._post_retries.pop(post_id, None)
+        self._photos.pop(post_id, None)
         log.info("published: post_id=%d message_id=%d photos=%d", post_id, message_id, photos_count)
         return await repo.get_post(self._pool, post_id)
+
+    async def _photos_for_send(self, post_id: int) -> list[PhotoData]:
+        """In-memory photo bytes; refetch by source_url after restart if lost."""
+        photos = self._photos.get(post_id)
+        if photos is not None:
+            return photos
+        images = await repo.get_post_images(self._pool, post_id)
+        urls = [image.source_url for image in images if image.source_url]
+        if not urls:
+            return []
+        photos = await self._refetch_photos(urls)
+        if photos:
+            self._photos[post_id] = photos
+        return photos
+
+    async def _refetch_photos(self, urls: list[str]) -> list[PhotoData]:
+        photos: list[PhotoData] = []
+        for url in urls:
+            data = await download_image(self._http, url, timeout=20.0, retries=2)
+            if data is not None:
+                photos.append((url, data))
+            else:
+                log.warning("photo refetch failed, publishing without it: url=%s", url[:200])
+        return photos
 
     async def _text_with_source(self, post: Post) -> str:
         if not self._cfg.publish.append_source:
@@ -137,6 +167,7 @@ class PublishService:
         )
         self._admin_msgs.pop(post_id, None)
         self._post_retries.pop(post_id, None)
+        self._photos.pop(post_id, None)
         log.info("rejected: post_id=%d reason=%s", post_id, reason)
 
     async def apply_edit(self, post_id: int, new_text: str) -> None:
@@ -182,6 +213,7 @@ class PublishService:
                     )
                     self._admin_msgs.pop(post_id, None)
                     self._post_retries.pop(post_id, None)
+                    self._photos.pop(post_id, None)
                     log.info("draft rejected by timeout: post_id=%s", post_id)
                     try:
                         await self._sender.send_admin_text(f"⏰ Черновик поста #{post_id} отклонён по таймауту модерации.")
@@ -212,14 +244,13 @@ class PublishService:
         post = await repo.get_post(self._pool, post_id)
         if post is None:
             return
-        images = await repo.get_post_images(self._pool, post_id)
-        local_paths = [image.local_path for image in images if image.local_path]
+        photos = await self._photos_for_send(post_id)
 
         text = post.text if note is None else f"{post.text}\n\n<i>{note}</i>"
-        keyboard = moderation_keyboard(post_id, has_photos=bool(local_paths))
-        message = await self._sender.send_moderation_draft(text, local_paths, keyboard)
+        keyboard = moderation_keyboard(post_id, has_photos=bool(photos))
+        message = await self._sender.send_moderation_draft(text, photos, keyboard)
         self._admin_msgs[post_id] = (message.chat.id, message.message_id)
-        log.info("draft sent to admin: post_id=%d photos=%d text_len=%d", post_id, len(local_paths), len(text))
+        log.info("draft sent to admin: post_id=%d photos=%d text_len=%d", post_id, len(photos), len(text))
 
     async def edit_draft_admin_message(self, post_id: int, new_text: str) -> None:
         ref = self._admin_msgs.get(post_id)

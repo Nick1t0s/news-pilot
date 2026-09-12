@@ -5,7 +5,6 @@ services:
     env_file: .env
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-      - images:/app/data/images
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -19,5 +18,4 @@ services:
       - "11434:11434"
 
 volumes:
-  images:
   ollama:

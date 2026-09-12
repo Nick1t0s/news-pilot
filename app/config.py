@@ -112,7 +112,6 @@ class Settings(BaseSettings):
     )
 
     log_level: str = "INFO"
-    data_dir: str = "data"
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)

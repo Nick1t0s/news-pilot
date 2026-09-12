@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 
 from aiogram import Bot
 from aiogram.exceptions import (
@@ -11,7 +10,7 @@ from aiogram.exceptions import (
     TelegramRetryAfter,
 )
 from aiogram.types import (
-    FSInputFile,
+    BufferedInputFile,
     InlineKeyboardMarkup,
     InputMediaPhoto,
     Message,
@@ -19,6 +18,7 @@ from aiogram.types import (
 )
 
 from app.config import Settings
+from app.photo.downloader import sniff_image_format
 from app.textutil import plain_text
 
 log = logging.getLogger("sender")
@@ -52,21 +52,25 @@ class TelegramSender:
             return f"{self._private_prefix}/{message_id}"
         return None
 
-    async def send_to_channel(self, text: str, photos: list[str], reply_to: int | None = None) -> tuple[int, str | None]:
+    async def send_to_channel(
+        self, text: str, photos: list[tuple[str, bytes]], reply_to: int | None = None,
+    ) -> tuple[int, str | None]:
         reply_parameters = ReplyParameters(message_id=reply_to) if reply_to else None
-        paths = [p for p in photos if p and Path(p).exists()]
-        if paths:
-            message_id = await self._send_with_photos(self._channel, text, paths, reply_parameters=reply_parameters)
+        photos = [(url, data) for url, data in photos if data]
+        if photos:
+            message_id = await self._send_with_photos(self._channel, text, photos, reply_parameters=reply_parameters)
         else:
             message = await self._send_text(self._channel, text, reply_parameters=reply_parameters)
             message_id = message.message_id
         return message_id, self.tg_url(message_id)
 
-    async def send_moderation_draft(self, text: str, photos: list[str], keyboard: InlineKeyboardMarkup) -> Message:
-        paths = [p for p in photos if p and Path(p).exists()]
-        if paths:
+    async def send_moderation_draft(
+        self, text: str, photos: list[tuple[str, bytes]], keyboard: InlineKeyboardMarkup,
+    ) -> Message:
+        photos = [(url, data) for url, data in photos if data]
+        if photos:
             try:
-                await self._send_with_photos(self._admin, "", paths)
+                await self._send_with_photos(self._admin, "", photos)
             except Exception:
                 log.exception("failed to send draft photos to admin")
         return await self._send_text(self._admin, text, keyboard=keyboard)
@@ -103,15 +107,16 @@ class TelegramSender:
             )
 
     async def _send_with_photos(
-        self, chat_id, caption: str, paths: list[str],
+        self, chat_id, caption: str, photos: list[tuple[str, bytes]],
         reply_parameters: ReplyParameters | None = None,
     ) -> int:
-        if len(paths) == 1:
+        files = [_input_file(data, index) for index, (_, data) in enumerate(photos)]
+        if len(files) == 1:
             try:
                 message = await self._call(
                     self._bot.send_photo,
                     chat_id=chat_id,
-                    photo=FSInputFile(paths[0]),
+                    photo=files[0],
                     caption=caption or None,
                     parse_mode="HTML" if caption else None,
                     reply_parameters=reply_parameters,
@@ -123,18 +128,18 @@ class TelegramSender:
                 message = await self._call(
                     self._bot.send_photo,
                     chat_id=chat_id,
-                    photo=FSInputFile(paths[0]),
+                    photo=files[0],
                     caption=plain_text(caption) if caption else None,
                     reply_parameters=reply_parameters,
                 )
                 return message.message_id
         media = [
             InputMediaPhoto(
-                media=FSInputFile(path),
+                media=file,
                 caption=caption if index == 0 else None,
                 parse_mode="HTML" if index == 0 and caption else None,
             )
-            for index, path in enumerate(paths)
+            for index, file in enumerate(files)
         ]
         try:
             messages = await self._call(
@@ -153,7 +158,13 @@ class TelegramSender:
             )
             return messages[0].message_id
 
-    async def _call(self, method, **kwargs):
+
+def _input_file(data: bytes, index: int) -> BufferedInputFile:
+    fmt = sniff_image_format(data) or "jpg"
+    return BufferedInputFile(data, filename=f"photo_{index}.{fmt}")
+
+
+async def _call(self, method, **kwargs):
         delay = 1.0
         for attempt in range(4):
             try:

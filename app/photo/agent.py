@@ -4,7 +4,6 @@ import base64
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
 import httpx
 
@@ -95,7 +94,7 @@ TOOLS: list[dict] = [
 @dataclass
 class PhotoRecord:
     source_url: str
-    local_path: str | None
+    data: bytes | None
 
 
 class PhotoAgent:
@@ -107,13 +106,11 @@ class PhotoAgent:
         llm,
         tavily: TavilyImageSearch,
         http: httpx.AsyncClient,
-        images_dir: Path,
     ) -> None:
         self._cfg = cfg
         self._llm = llm
         self._tavily = tavily
         self._http = http
-        self._images_dir = images_dir
 
     async def collect(self, news: News) -> list[PhotoRecord]:
         try:
@@ -188,16 +185,11 @@ class PhotoAgent:
             if candidate is None:
                 continue
             url = candidate["url"]
-            path = await download_image(
-                self._http,
-                url,
-                self._images_dir / f"news_{news.id}",
-                base_name=f"{cid}",
-                timeout=20.0,
-                retries=2,
-            )
-            if path is not None:
-                records.append(PhotoRecord(source_url=url, local_path=str(path)))
+            data = candidate["bytes"]
+            if data is None:
+                data = await download_image(self._http, url, timeout=20.0, retries=2)
+            if data is not None:
+                records.append(PhotoRecord(source_url=url, data=data))
             else:
                 log.warning("selected photo failed validation, dropped: url=%s", url[:200])
         return records

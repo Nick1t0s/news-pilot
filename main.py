@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from pathlib import Path
 
 import httpx
 from aiogram import Bot
@@ -57,14 +56,13 @@ async def run() -> None:
         timeout=cfg.tavily.timeout_seconds,
         retries=cfg.tavily.retries,
     )
-    images_dir = Path(cfg.data_dir) / "images"
-    photo_agent = PhotoAgent(cfg, llm, tavily, http, images_dir)
+    photo_agent = PhotoAgent(cfg, llm, tavily, http)
     context_search = ContextSearch(cfg, pool, embeddings)
     generator = PostGenerator(cfg, llm, project_root() / "prompts" / "style.md")
 
     bot = Bot(cfg.telegram.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     sender = TelegramSender(bot, cfg)
-    publisher = PublishService(cfg, pool, sender, embeddings)
+    publisher = PublishService(cfg, pool, sender, embeddings, http)
 
     queue: asyncio.Queue[int] = asyncio.Queue()
     pipeline = Pipeline(cfg, pool, queue, dedup, photo_agent, context_search, generator, publisher)

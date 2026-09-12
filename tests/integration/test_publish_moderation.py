@@ -5,6 +5,8 @@ from app.db.entities import NewsStatus, PostStatus
 from app.publish.service import PublishService
 from tests.mocks import FakeEmbeddings, FakeSender
 
+STUB_BYTES = b"\xff\xd8\xffstub-jpeg-data"
+
 
 async def _make_post(pool, *, external_id: str, photo: str | None) -> int:
     news_id = await repo.add_news(
@@ -20,18 +22,20 @@ async def _make_post(pool, *, external_id: str, photo: str | None) -> int:
     )
     post_id = await repo.insert_post(pool, news_id, "Текст поста", PostStatus.draft)
     if photo is not None:
-        await repo.add_post_images(pool, post_id, [("https://src/img.jpg", photo)])
+        await repo.add_post_images(pool, post_id, [photo])
     return post_id
 
 
 def make_service(settings, pool) -> tuple[PublishService, FakeSender]:
     sender = FakeSender()
-    return PublishService(settings, pool, sender, FakeEmbeddings()), sender
+    service = PublishService(settings, pool, sender, FakeEmbeddings(), http=None)
+    return service, sender
 
 
 async def test_publishes_without_photos_when_requested(settings, pool) -> None:
     service, sender = make_service(settings, pool)
-    post_id = await _make_post(pool, external_id="nophoto-1", photo="data/images/x.jpg")
+    post_id = await _make_post(pool, external_id="nophoto-1", photo="https://src/img.jpg")
+    service._photos[post_id] = [("https://src/img.jpg", STUB_BYTES)]
 
     post = await service.approve(post_id, drop_photos=True)
 
@@ -44,11 +48,44 @@ async def test_publishes_without_photos_when_requested(settings, pool) -> None:
 
 async def test_default_publish_keeps_photos(settings, pool) -> None:
     service, sender = make_service(settings, pool)
-    post_id = await _make_post(pool, external_id="withphoto-1", photo="data/images/y.jpg")
+    post_id = await _make_post(pool, external_id="withphoto-1", photo="https://src/img.jpg")
+    service._photos[post_id] = [("https://src/img.jpg", STUB_BYTES)]
 
     await service.approve(post_id)
 
-    assert sender.published[-1]["photos"] == ["data/images/y.jpg"]
+    assert sender.published[-1]["photos"] == [("https://src/img.jpg", STUB_BYTES)]
+    post = await repo.get_post(pool, post_id)
+    assert post.status == PostStatus.published
+
+
+async def test_photos_refetched_by_url_after_restart(settings, pool, monkeypatch) -> None:
+    refetched: list[str] = []
+
+    async def fake_download(http, url, *, timeout=20.0, retries=2):
+        refetched.append(url)
+        return STUB_BYTES
+
+    monkeypatch.setattr("app.publish.service.download_image", fake_download)
+    service, sender = make_service(settings, pool)
+    post_id = await _make_post(pool, external_id="refetch-1", photo="https://src/img.jpg")
+
+    await service.approve(post_id)
+
+    assert refetched == ["https://src/img.jpg"]
+    assert sender.published[-1]["photos"] == [("https://src/img.jpg", STUB_BYTES)]
+
+
+async def test_publishes_text_only_when_refetch_fails(settings, pool, monkeypatch) -> None:
+    async def fake_download_fail(http, url, *, timeout=20.0, retries=2):
+        return None
+
+    monkeypatch.setattr("app.publish.service.download_image", fake_download_fail)
+    service, sender = make_service(settings, pool)
+    post_id = await _make_post(pool, external_id="refetch-2", photo="https://src/img.jpg")
+
+    await service.approve(post_id)
+
+    assert sender.published[-1]["photos"] == []
     post = await repo.get_post(pool, post_id)
     assert post.status == PostStatus.published
 

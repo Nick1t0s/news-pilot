@@ -207,13 +207,13 @@ async def get_post_images(pool: asyncpg.Pool, post_id: int) -> list[PostImage]:
     return [PostImage(**dict(row)) for row in rows]
 
 
-async def add_post_images(pool: asyncpg.Pool, post_id: int, images: list[tuple[str, str | None]]) -> None:
+async def add_post_images(pool: asyncpg.Pool, post_id: int, source_urls: list[str]) -> None:
     async with pool.acquire() as conn, conn.transaction():
-        for position, (source_url, local_path) in enumerate(images):
+        for position, source_url in enumerate(source_urls):
             await conn.execute(
                 "INSERT INTO post_images (post_id, source_url, local_path, position)"
-                " VALUES ($1, $2, $3, $4)",
-                post_id, source_url, local_path, position,
+                " VALUES ($1, $2, NULL, $3)",
+                post_id, source_url, position,
             )
 
 

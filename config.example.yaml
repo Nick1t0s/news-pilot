@@ -3,7 +3,6 @@
 #   LLM__API_KEY=..., TAVILY__API_KEY=..., TELEGRAM__BOT_TOKEN=..., DATABASE__DSN=...
 
 log_level: INFO
-data_dir: data
 
 llm:
   base_url: "https://api.openai.com/v1"

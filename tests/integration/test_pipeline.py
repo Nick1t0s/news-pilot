@@ -98,7 +98,7 @@ class Bundle:
         self.photo = StubPhotoAgent()
         self.generator = StubGenerator()
         self.context = StubContext(settings, pool, self.embeddings)
-        self.publisher = PublishService(settings, pool, self.sender, self.embeddings)
+        self.publisher = PublishService(settings, pool, self.sender, self.embeddings, http=None)
         self.queue: asyncio.Queue[int] = asyncio.Queue()
         self.pipeline = Pipeline(
             settings, pool, self.queue,
@@ -268,7 +268,7 @@ async def test_photo_failure_does_not_block(settings, pool, monkeypatch) -> None
 async def test_photo_selection_saves_images(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
-    box.photo.photos = [PhotoRecord(source_url="https://example.com/img1.jpg", local_path="/tmp/none.jpg")]
+    box.photo.photos = [PhotoRecord(source_url="https://example.com/img1.jpg", data=b"\xff\xd8\xffstub")]
     box.generator.draft = PostDraft(text="пост с фото", reference_ids=[])
 
     item = NewsItem(source="lenta", external_id="guid-i", title="Метро открыто", summary="s", link="https://example.com/i")
@@ -277,7 +277,7 @@ async def test_photo_selection_saves_images(settings, pool, monkeypatch) -> None
     await box.drain()
 
     assert len(box.sender.published) == 1
-    assert box.sender.published[0]["photos"] == ["/tmp/none.jpg"]
+    assert box.sender.published[0]["photos"] == [("https://example.com/img1.jpg", b"\xff\xd8\xffstub")]
     assert await repo.count_post_images(pool) == 1
 
 

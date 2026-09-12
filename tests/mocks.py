@@ -89,14 +89,16 @@ class FakeSender:
         self.drafts: list[dict] = []
         self.admin_texts: list[str] = []
 
-    async def send_to_channel(self, text: str, photos: list[str], reply_to: int | None = None) -> tuple[int, str]:
+    async def send_to_channel(
+        self, text: str, photos: list[tuple[str, bytes]], reply_to: int | None = None,
+    ) -> tuple[int, str]:
         self._counter += 1
         self.published.append(
             {"text": text, "photos": list(photos), "message_id": self._counter, "reply_to": reply_to}
         )
         return self._counter, f"https://t.me/testchannel/{self._counter}"
 
-    async def send_moderation_draft(self, text: str, photos: list[str], keyboard):
+    async def send_moderation_draft(self, text: str, photos: list[tuple[str, bytes]], keyboard):
         self._counter += 1
         self.drafts.append({"text": text, "photos": list(photos)})
         return SimpleNamespace(chat=SimpleNamespace(id=1), message_id=self._counter)

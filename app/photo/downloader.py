@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import httpx
 
@@ -31,13 +30,11 @@ def mime_for_format(fmt: str) -> str:
 async def download_image(
     http: httpx.AsyncClient,
     url: str,
-    dest_dir: Path,
     *,
-    base_name: str,
     timeout: float = 20.0,
     retries: int = 2,
-) -> Path | None:
-    """Download and validate an image; returns local path or None."""
+) -> bytes | None:
+    """Download and validate an image; returns raw bytes or None."""
 
     async def fetch() -> bytes:
         resp = await http.get(url, timeout=timeout, follow_redirects=True)
@@ -57,11 +54,7 @@ async def download_image(
     except Exception as exc:  # noqa: BLE001
         log.warning("image download failed url=%s: %s", url[:200], exc)
         return None
-    fmt = sniff_image_format(data)
-    if fmt is None:
+    if sniff_image_format(data) is None:
         log.warning("unsupported image format url=%s", url[:200])
         return None
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    path = dest_dir / f"{base_name}.{fmt}"
-    path.write_bytes(data)
-    return path
+    return data
