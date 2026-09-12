@@ -39,6 +39,11 @@ async def build_stats_text(pool: asyncpg.Pool, cfg: Settings, queued_count: int)
             "7д": await _news_status_count(conn, NewsStatus.needs_review, week_ago),
             "всего": await _news_status_count(conn, NewsStatus.needs_review, None),
         }
+        cleared = {
+            "24ч": await _news_status_count(conn, NewsStatus.cleared, day_ago),
+            "7д": await _news_status_count(conn, NewsStatus.cleared, week_ago),
+            "всего": await _news_status_count(conn, NewsStatus.cleared, None),
+        }
         processing = await conn.fetchval(
             "SELECT COUNT(*) FROM news WHERE status = ANY($1)",
             [
@@ -72,6 +77,7 @@ async def build_stats_text(pool: asyncpg.Pool, cfg: Settings, queued_count: int)
     lines.append(_row("🧹 Дубликатов", duplicates))
     lines.append(_row("💀 Ошибок (failed)", failed))
     lines.append(_row("⚠️ Требуют проверки", needs_review))
+    lines.append(_row("🧾 Пропущено (clear_run)", cleared))
     lines.append("")
     lines.append("<b>Текущее состояние:</b>")
     lines.append(f"🔄 В обработке: {int(processing)}")

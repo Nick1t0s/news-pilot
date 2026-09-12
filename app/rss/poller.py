@@ -29,6 +29,13 @@ class FeedPoller:
         self._queue = queue
 
     async def run_forever(self) -> None:
+        try:
+            if self._cfg.rss.clear_run:
+                cleared = await self.poll_once(clear=True)
+                if cleared:
+                    log.info("clear run: %d preexisting feed items marked cleared", cleared)
+        except Exception:
+            log.exception("clear run poll failed")
         while True:
             try:
                 added = await self.poll_once()
@@ -38,9 +45,9 @@ class FeedPoller:
                 log.exception("poll cycle failed")
             await asyncio.sleep(self._cfg.rss.poll_interval_seconds)
 
-    async def poll_once(self) -> int:
+    async def poll_once(self, *, clear: bool = False) -> int:
         results = await asyncio.gather(
-            *(self._poll_feed(feed) for feed in self._cfg.rss.feeds),
+            *(self._poll_feed(feed, clear=clear) for feed in self._cfg.rss.feeds),
             return_exceptions=True,
         )
         added = 0
@@ -51,20 +58,37 @@ class FeedPoller:
                 added += result
         return added
 
-    async def _poll_feed(self, feed) -> int:
+    async def _poll_feed(self, feed, *, clear: bool = False) -> int:
         resp = await self._http.get(feed.url, timeout=self._cfg.fetcher.timeout_seconds)
         resp.raise_for_status()
         items = parse_feed(resp.content, feed.name)
         added = 0
         for item in items:
-            if await self.ingest_item(item):
+            if await self.ingest_item(item, clear=clear):
                 added += 1
         return added
 
-    async def ingest_item(self, item) -> bool:
+    async def ingest_item(self, item, *, clear: bool = False) -> bool:
         """Fetch full text and persist a new news row. Returns True if a new row was created."""
         if await repo.news_exists(self._pool, item.source, item.external_id):
             return False
+
+        if clear:
+            news_id = await repo.add_news(
+                self._pool,
+                source=item.source,
+                external_id=item.external_id,
+                title=item.title,
+                text=item.summary,
+                url=item.link,
+                full_text_fetched=False,
+                published_at=item.published_at,
+                status=NewsStatus.cleared,
+                log_stage_name="fetch",
+                log_message="present in feed at startup (clear_run), skipped",
+            )
+            log.info("cleared: source=%s news_id=%d title=%r", item.source, news_id, item.title[:80])
+            return True
 
         text, fetched = await self._load_text(item)
         if len(text) < self._cfg.fetcher.min_text_length:

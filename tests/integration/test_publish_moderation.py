@@ -114,3 +114,24 @@ async def test_moderation_mode_does_not_notify_admin(settings, pool) -> None:
     await service.approve(post_id)
 
     assert sender.admin_texts == []
+
+
+async def test_append_source_adds_link_to_post(settings, pool) -> None:
+    settings.publish.append_source = True
+    service, sender = make_service(settings, pool)
+    post_id = await _make_post(pool, external_id="src-1", photo=None)
+
+    await service.approve(post_id)
+
+    text = sender.published[-1]["text"]
+    assert text.startswith("Текст поста")
+    assert '<a href="https://example.com/x">Источник</a>' in text
+
+
+async def test_append_source_disabled_keeps_text(settings, pool) -> None:
+    service, sender = make_service(settings, pool)
+    post_id = await _make_post(pool, external_id="src-2", photo=None)
+
+    await service.approve(post_id)
+
+    assert sender.published[-1]["text"] == "Текст поста"

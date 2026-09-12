@@ -69,7 +69,8 @@ class PublishService:
             local_paths = [] if drop_photos else [image.local_path for image in images if image.local_path]
             photos_count = len(local_paths)
             reply_to = await self._resolve_reply_target(post_id)
-            message_id, tg_url = await self._sender.send_to_channel(post.text, local_paths, reply_to=reply_to)
+            text = await self._text_with_source(post)
+            message_id, tg_url = await self._sender.send_to_channel(text, local_paths, reply_to=reply_to)
             await repo.set_post_tg_message(self._pool, post_id, message_id, tg_url)
         embedding = await self._safe_embed(post.text)
         await repo.update_post_published(
@@ -85,6 +86,14 @@ class PublishService:
         self._post_retries.pop(post_id, None)
         log.info("published: post_id=%d message_id=%d photos=%d", post_id, message_id, photos_count)
         return await repo.get_post(self._pool, post_id)
+
+    async def _text_with_source(self, post: Post) -> str:
+        if not self._cfg.publish.append_source:
+            return post.text
+        news = await repo.get_news(self._pool, post.news_id)
+        if news is None or not news.url:
+            return post.text
+        return f'{post.text}\n\n🔗 <a href="{html.escape(news.url, quote=True)}">Источник</a>'
 
     async def _notify_admin_published(self, post_id: int, link: int | str) -> None:
         try:

@@ -44,6 +44,7 @@ class FeedConfig(ExtraForbid):
 
 class RssConfig(ExtraForbid):
     poll_interval_seconds: int = 300
+    clear_run: bool = False
     feeds: list[FeedConfig] = Field(default_factory=list)
 
 
@@ -98,6 +99,7 @@ class PublishConfig(ExtraForbid):
     mode: Literal["auto", "moderation"] = "moderation"
     moderation_timeout_hours: float = 24.0
     notify_admin: bool = False
+    append_source: bool = False
 
 
 class Settings(BaseSettings):

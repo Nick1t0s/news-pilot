@@ -89,9 +89,10 @@ async def run() -> None:
         asyncio.create_task(dp.start_polling(bot, handle_signals=False), name="telegram"),
     ]
     log.info(
-        "news-pilot started: feeds=%d mode=%s",
+        "news-pilot started: feeds=%d mode=%s clear_run=%s",
         len(cfg.rss.feeds),
         cfg.publish.mode,
+        cfg.rss.clear_run,
     )
 
     await stop.wait()

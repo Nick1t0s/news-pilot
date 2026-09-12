@@ -23,6 +23,7 @@ embeddings:
 
 rss:
   poll_interval_seconds: 300
+  clear_run: false          # при запуске: все записи, уже лежащие в лентах, помечаются cleared и не обрабатываются
   feeds:
     - name: "lenta"
       url: "https://lenta.ru/rss"
@@ -69,3 +70,4 @@ publish:
   mode: moderation        # auto | moderation
   moderation_timeout_hours: 24
   notify_admin: false     # в режиме auto — уведомлять админа о каждой публикации (ссылка, время, источник)
+  append_source: false    # добавлять в конец поста ссылку на новость-источник

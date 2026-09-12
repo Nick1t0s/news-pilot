@@ -328,3 +328,85 @@ async def test_stats_matches_db(settings, pool, monkeypatch) -> None:
 
 def dt_utc(*args):
     return dt.datetime(*args, tzinfo=dt.timezone.utc)
+
+
+async def test_clear_run_marks_items_cleared(settings, pool) -> None:
+    queue: asyncio.Queue[int] = asyncio.Queue()
+    poller = FeedPoller(settings, None, pool, queue)
+    item = NewsItem(
+        source="lenta", external_id="guid-clear-1", title="Старая новость",
+        summary="старый summary", link="https://example.com/clear-1",
+    )
+
+    assert await poller.ingest_item(item, clear=True) is True
+    assert await poller.ingest_item(item, clear=True) is False
+
+    news = await repo.get_news(pool, await repo.latest_news_id(pool))
+    assert news.status == NewsStatus.cleared
+    assert news.text == "старый summary"
+    assert news.full_text_fetched is False
+    assert news.embedding is None
+    assert queue.empty()
+
+
+async def test_normal_ingest_after_clear_run(settings, pool, monkeypatch) -> None:
+    patch_fetch(monkeypatch, METRO_TEXT)
+    queue: asyncio.Queue[int] = asyncio.Queue()
+    poller = FeedPoller(settings, None, pool, queue)
+    old = NewsItem(source="lenta", external_id="guid-old", title="Старая", summary="s", link="https://example.com/old")
+    fresh = NewsItem(source="lenta", external_id="guid-fresh", title="Свежая", summary="s", link="https://example.com/fresh")
+
+    assert await poller.ingest_item(old, clear=True) is True
+    assert await poller.ingest_item(fresh) is True
+
+    news_id = await queue.get()
+    news = await repo.get_news(pool, news_id)
+    assert news.status == NewsStatus.pending
+    assert news.external_id == "guid-fresh"
+    assert queue.empty()
+
+
+async def test_cleared_news_not_in_dedup_candidates(settings, pool, monkeypatch) -> None:
+    patch_fetch(monkeypatch, METRO_TEXT)
+    queue: asyncio.Queue[int] = asyncio.Queue()
+    poller = FeedPoller(settings, None, pool, queue)
+    item = NewsItem(source="lenta", external_id="guid-clear-2", title="Старая", summary="s", link="https://example.com/clear-2")
+    await poller.ingest_item(item, clear=True)
+    cleared = await repo.get_news(pool, await repo.latest_news_id(pool))
+
+    box = Bundle(settings, pool)
+    box.llm.push_json({"is_duplicate": False, "reason": "unique", "duplicate_of_id": None})
+    news_id = await box.ingest(NewsItem(source="lenta", external_id="guid-new", title="Метро открыто", summary="s", link="https://example.com/new"))
+    await box.pipeline.process(news_id)
+    await box.drain()
+
+    news = await box.news(news_id)
+    assert news.status == NewsStatus.published
+    log_rows = await pool.fetch(
+        "SELECT message FROM processing_log WHERE news_id = $1 AND stage = 'dedup'", news_id
+    )
+    assert any("no candidates" in row["message"] for row in log_rows)
+    assert cleared.embedding is None
+
+
+async def test_cleared_news_has_no_posts(settings, pool, monkeypatch) -> None:
+    patch_fetch(monkeypatch, METRO_TEXT)
+    queue: asyncio.Queue[int] = asyncio.Queue()
+    poller = FeedPoller(settings, None, pool, queue)
+    item = NewsItem(source="lenta", external_id="guid-clear-3", title="Старая", summary="s", link="https://example.com/clear-3")
+    await poller.ingest_item(item, clear=True)
+    cleared = await repo.get_news(pool, await repo.latest_news_id(pool))
+
+    box = Bundle(settings, pool)
+    box.generator.draft = PostDraft(text=METRO_TEXT, reference_ids=[])
+    news_id = await box.ingest(NewsItem(source="lenta", external_id="guid-new-3", title="Метро открыто", summary="s", link="https://example.com/new-3"))
+    await box.pipeline.process(news_id)
+    await box.drain()
+
+    posts = await box.all_posts()
+    assert len(posts) == 1
+    related = await ContextSearch(settings, pool, box.embeddings).find(
+        News(id=999, source="lenta", external_id="x", title=METRO_TEXT, text=METRO_TEXT, url="https://example.com/x")
+    )
+    assert all(post.news_id != cleared.id for post in posts)
+    assert all(post.news_id != cleared.id for post in related)
