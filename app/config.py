@@ -101,6 +101,10 @@ class ContextConfig(ExtraForbid):
     min_similarity: float = 0.5
 
 
+class PipelineConfig(ExtraForbid):
+    retries: int = 2
+
+
 class PublishConfig(ExtraForbid):
     mode: Literal["auto", "moderation"] = "moderation"
     moderation_timeout_hours: float = 24.0
@@ -130,6 +134,7 @@ class Settings(BaseSettings):
     dedup: DedupConfig = Field(default_factory=DedupConfig)
     photo_agent: PhotoAgentConfig = Field(default_factory=PhotoAgentConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
 
     @classmethod

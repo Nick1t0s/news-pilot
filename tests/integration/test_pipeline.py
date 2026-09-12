@@ -25,6 +25,7 @@ from app.dedup import DedupService
 from app.generator import PostDraft
 from app.photo.agent import PhotoRecord
 from app.pipeline.processor import Pipeline
+from app.providers.llm import LLMError
 from app.publish.service import PublishService
 from app.rss.parse import NewsItem
 from app.rss.poller import FeedPoller
@@ -69,10 +70,15 @@ class StubPhotoAgent:
 
 
 class StubGenerator:
-    def __init__(self) -> None:
+    def __init__(self, fail_times: int = 0) -> None:
         self.draft = PostDraft(text="пост", reference_ids=[])
+        self.fail_times = fail_times
+        self.calls = 0
 
     async def generate(self, news, related) -> PostDraft:
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise LLMError("generator returned empty post text")
         allowed = {post.id for post in related}
         return PostDraft(text=self.draft.text, reference_ids=[
             pid for pid in self.draft.reference_ids if pid in allowed
@@ -263,6 +269,86 @@ async def test_photo_failure_does_not_block(settings, pool, monkeypatch) -> None
     assert news.status == NewsStatus.published
     assert len(box.sender.published) == 1
     assert box.sender.published[0]["photos"] == []
+
+
+async def test_pipeline_retry_recovers(settings, pool, monkeypatch) -> None:
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+    box.generator.fail_times = 1
+    box.generator.draft = PostDraft(text="пост после ретрая", reference_ids=[])
+
+    item = NewsItem(source="lenta", external_id="guid-r1", title="Метро открыто", summary="s", link="https://example.com/r1")
+    news_id = await box.ingest(item)
+    await box.pipeline.process(news_id)
+    await box.drain()
+
+    news = await box.news(news_id)
+    assert news.status == NewsStatus.published
+    assert box.generator.calls == 2
+    assert box.queue.empty()
+    posts = await box.all_posts()
+    assert len(posts) == 1
+    log_rows = await pool.fetch(
+        "SELECT level, message FROM processing_log WHERE news_id = $1 AND stage = 'pipeline'", news_id
+    )
+    assert any(
+        row["level"] == "warn" and "retry 1/1" in row["message"] and "LLMError" in row["message"]
+        for row in log_rows
+    )
+
+
+async def test_pipeline_retry_exhausted(settings, pool, monkeypatch) -> None:
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+    box.generator.fail_times = 99
+
+    item = NewsItem(source="lenta", external_id="guid-r2", title="Метро открыто", summary="s", link="https://example.com/r2")
+    news_id = await box.ingest(item)
+    await box.pipeline.process(news_id)
+
+    news = await box.news(news_id)
+    assert news.status == NewsStatus.failed
+    assert box.generator.calls == 2
+    assert box.queue.empty()
+    assert await box.all_posts() == []
+    log_rows = await pool.fetch(
+        "SELECT message FROM processing_log WHERE news_id = $1 AND stage = 'pipeline'", news_id
+    )
+    assert any("failed after 2 attempts" in row["message"] for row in log_rows)
+
+
+async def test_pipeline_retry_cleans_orphan_draft(settings, pool, monkeypatch) -> None:
+    settings.publish.mode = "moderation"
+    settings.pipeline.retries = 2
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+    box.generator.fail_times = 1
+    box.generator.draft = PostDraft(text="пост в модерацию", reference_ids=[])
+
+    send_calls = {"n": 0}
+
+    async def flaky_send_draft(post_id, note=None):
+        send_calls["n"] += 1
+        if send_calls["n"] == 1:
+            raise RuntimeError("telegram down")
+
+    monkeypatch.setattr(box.publisher, "send_draft", flaky_send_draft)
+
+    item = NewsItem(source="lenta", external_id="guid-r3", title="Метро открыто", summary="s", link="https://example.com/r3")
+    news_id = await box.ingest(item)
+    await box.pipeline.process(news_id)
+
+    news = await box.news(news_id)
+    assert news.status == NewsStatus.moderation
+    assert send_calls["n"] == 2
+    posts = await box.all_posts()
+    assert len(posts) == 1
+    assert posts[0].status == PostStatus.draft
+    log_rows = await pool.fetch(
+        "SELECT message FROM processing_log WHERE news_id = $1 AND stage = 'pipeline'", news_id
+    )
+    assert any("retry 1/2" in row["message"] and "LLMError" in row["message"] for row in log_rows)
+    assert any("retry 2/2" in row["message"] and "RuntimeError" in row["message"] for row in log_rows)
 
 
 async def test_photo_selection_saves_images(settings, pool, monkeypatch) -> None:

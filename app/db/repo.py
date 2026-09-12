@@ -276,6 +276,20 @@ async def delete_post(pool: asyncpg.Pool, post_id: int) -> None:
         await conn.execute("DELETE FROM posts WHERE id = $1", post_id)
 
 
+async def delete_posts_for_news(
+    pool: asyncpg.Pool,
+    news_id: int,
+    statuses: tuple[PostStatus, ...] = (PostStatus.draft, PostStatus.failed),
+) -> int:
+    """Delete a news's leftover posts (default: draft/failed); returns how many rows were removed."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "DELETE FROM posts WHERE news_id = $1 AND status = ANY($2) RETURNING id",
+            news_id, [status.value for status in statuses],
+        )
+    return len(rows)
+
+
 async def expire_old_drafts(pool: asyncpg.Pool, cutoff: dt.datetime) -> list[tuple[int, int]]:
     """Delete stale moderation drafts; returns (post_id, news_id) pairs."""
     async with pool.acquire() as conn:

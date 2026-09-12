@@ -60,22 +60,50 @@ class Pipeline:
     async def process(self, news_id: int) -> None:
         set_news_id(news_id)
         started = time.monotonic()
-        news = await repo.get_news(self._pool, news_id)
-        title = _short_title(news)
-        log.info("processing started: title=%r", title)
-        try:
-            verdict = await self._run_dedup(news_id)
-            if verdict is not None:
-                log.info("processing finished: result=%s in %.1fs", verdict, time.monotonic() - started)
+        max_retries = self._cfg.pipeline.retries
+        for attempt in range(1, max_retries + 2):
+            news = await repo.get_news(self._pool, news_id)
+            if news is not None and news.status in (NewsStatus.queued, NewsStatus.moderation, NewsStatus.published):
+                # the draft was already dispatched to the publish path; it owns the outcome now
+                log.info("processing skipped: news %s already dispatched (status=%s)", news_id, news.status.value)
                 return
-            photos = await self._run_photo(news_id)
-            await self._run_writing_and_publish(news_id, photos, time.monotonic() - started)
-            log.info("processing finished: result=draft in %.1fs", time.monotonic() - started)
-        except Exception as exc:
-            log.exception("pipeline stage failed")
-            await self._fail(news_id, str(exc))
-        finally:
-            set_news_id(None)
+            if attempt > 1:
+                log.info("processing retry (attempt %d/%d): title=%r", attempt, max_retries + 1, _short_title(news))
+            try:
+                verdict = await self._run_dedup(news_id)
+                if verdict is not None:
+                    log.info("processing finished: result=%s in %.1fs", verdict, time.monotonic() - started)
+                    return
+                photos = await self._run_photo(news_id)
+                await self._run_writing_and_publish(news_id, photos, time.monotonic() - started)
+                log.info("processing finished: result=draft in %.1fs", time.monotonic() - started)
+                return
+            except Exception as exc:
+                log.exception("pipeline stage failed")
+                if isinstance(exc, LookupError):
+                    # news row is gone, retrying is pointless
+                    await self._fail(news_id, str(exc))
+                    return
+                if attempt > max_retries:
+                    message = f"{type(exc).__name__}: {exc}"
+                    if attempt > 1:
+                        message = f"failed after {attempt} attempts: {message}"
+                    await self._fail(news_id, message)
+                    return
+                await self._prepare_retry(news_id, attempt, max_retries, exc)
+
+    async def _prepare_retry(self, news_id: int, attempt: int, max_retries: int, exc: Exception) -> None:
+        """Drop leftover drafts from the failed attempt and log the retry decision."""
+        message = f"{type(exc).__name__}: {exc}"
+        try:
+            await repo.delete_posts_for_news(self._pool, news_id)
+            await repo.log_stage(self._pool, news_id, "pipeline", "warn", f"retry {attempt}/{max_retries}: {message}")
+        except Exception:
+            log.exception("failed to persist retry state for news %s", news_id)
+        log.warning(
+            "retrying immediately (attempt %d/%d): news_id=%d error=%s",
+            attempt + 1, max_retries + 1, news_id, message,
+        )
 
     async def _run_dedup(self, news_id: int) -> str | None:
         stage = time.monotonic()
