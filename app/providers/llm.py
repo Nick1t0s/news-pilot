@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from openai import (
     APIConnectionError,
@@ -57,9 +58,12 @@ class LLMProvider:
             )
 
         try:
-            return await with_retries(
+            start = time.monotonic()
+            result = await with_retries(
                 call, attempts=self._cfg.retries, exceptions=_TRANSIENT, what="llm.chat"
             )
+            log.info("chat ok model=%s tools=%d in %.1fs", self._cfg.model, len(tools or []), time.monotonic() - start)
+            return result
         except _TRANSIENT as exc:
             raise LLMError(f"llm chat failed: {exc}") from exc
 

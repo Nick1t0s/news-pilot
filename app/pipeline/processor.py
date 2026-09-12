@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import asyncpg
 
 from app.db import repo
-from app.db.entities import NewsStatus
+from app.db.entities import News, NewsStatus
 from app.logging import set_news_id
 
 log = logging.getLogger("pipeline")
+
+
+def _short_title(news: News | None) -> str:
+    return news.title[:80] if news else ""
 
 
 class Pipeline:
@@ -47,20 +52,26 @@ class Pipeline:
 
     async def process(self, news_id: int) -> None:
         set_news_id(news_id)
-        log.info("processing started")
+        started = time.monotonic()
+        news = await repo.get_news(self._pool, news_id)
+        title = _short_title(news)
+        log.info("processing started: title=%r", title)
         try:
             verdict = await self._run_dedup(news_id)
             if verdict is not None:
+                log.info("processing finished: result=%s in %.1fs", verdict, time.monotonic() - started)
                 return
             photos = await self._run_photo(news_id)
             await self._run_writing_and_publish(news_id, photos)
+            log.info("processing finished: result=draft in %.1fs", time.monotonic() - started)
         except Exception as exc:
             log.exception("pipeline stage failed")
             await self._fail(news_id, str(exc))
         finally:
             set_news_id(None)
 
-    async def _run_dedup(self, news_id: int) -> bool | None:
+    async def _run_dedup(self, news_id: int) -> str | None:
+        stage = time.monotonic()
         await repo.set_news_status(self._pool, news_id, NewsStatus.dedup, stage="dedup", message="stage started")
         verdict = await self._dedup.process(news_id)
         if verdict.kind == "unique":
@@ -86,10 +97,11 @@ class Pipeline:
                 message=f"dropped by dedup error policy: {verdict.reason}",
                 level="error",
             )
-        log.info("processing finished: result=%s", verdict.kind)
-        return True
+        log.info("stage=dedup verdict=%s in %.1fs", verdict.kind, time.monotonic() - stage)
+        return verdict.kind
 
     async def _run_photo(self, news_id: int) -> list:
+        stage = time.monotonic()
         await repo.set_news_status(self._pool, news_id, NewsStatus.photo_search, stage="photo", message="stage started")
         news = await repo.get_news(self._pool, news_id)
         if news is None:
@@ -100,10 +112,11 @@ class Pipeline:
             log.warning("photo agent crashed, publishing without photos: %s", exc)
             photos = []
         await repo.log_stage(self._pool, news_id, "photo", "info", f"photo stage done: found={len(photos)}")
-        log.info("photo stage done: found=%d", len(photos))
+        log.info("stage=photo found=%d in %.1fs", len(photos), time.monotonic() - stage)
         return photos
 
     async def _run_writing_and_publish(self, news_id: int, photos: list) -> None:
+        stage = time.monotonic()
         await repo.set_news_status(self._pool, news_id, NewsStatus.writing, stage="writing", message="stage started")
         news = await repo.get_news(self._pool, news_id)
         if news is None:
@@ -111,6 +124,7 @@ class Pipeline:
         related = await self._context.find(news)
         draft = await self._generator.generate(news, related)
         await self._publisher.submit(news, draft, photos)
+        log.info("stage=writing done in %.1fs", time.monotonic() - stage)
 
     async def _fail(self, news_id: int, message: str) -> None:
         try:

@@ -98,7 +98,7 @@ class FeedPoller:
             log_message="full text fetched" if fetched else "full text fetch failed, using rss summary",
         )
         self._queue.put_nowait(news_id)
-        log.info("new item queued: source=%s news_id=%d", item.source, news_id)
+        log.info("new item queued: source=%s news_id=%d title=%r", item.source, news_id, item.title[:80])
         return True
 
     async def _load_text(self, item) -> tuple[str, bool]:

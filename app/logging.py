@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import datetime as dt
-import json
 import logging
 import sys
 from contextvars import ContextVar
@@ -17,36 +15,25 @@ def get_news_id() -> int | None:
     return news_id_var.get()
 
 
-_EXTRA_KEYS = ("stage", "source", "feed", "post_id", "attempt", "tool")
+class ConsoleFormatter(logging.Formatter):
+    """`LOGGER: message [news_id=N]` — human-readable single-line format."""
 
-
-class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        ts = dt.datetime.fromtimestamp(record.created, tz=dt.timezone.utc).isoformat(timespec="milliseconds")
-        payload: dict = {
-            "ts": ts,
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-        }
+        line = f"{record.name.upper()}: {record.getMessage()}"
         news_id = news_id_var.get()
         if news_id is not None:
-            payload["news_id"] = news_id
-        for key in _EXTRA_KEYS:
-            value = record.__dict__.get(key)
-            if value is not None:
-                payload[key] = value
+            line += f" [news_id={news_id}]"
         if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=False)
+            line += "\n" + self.formatException(record.exc_info)
+        return line
 
 
 def setup_logging(level: str = "INFO") -> None:
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
+    handler.setFormatter(ConsoleFormatter())
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level.upper())
-    for noisy in ("httpx", "httpcore", "aiosqlite", "asyncio"):
+    for noisy in ("httpx", "httpcore", "aiosqlite", "asyncio", "aiogram.event", "aiogram.dispatcher"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

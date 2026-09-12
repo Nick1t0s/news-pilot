@@ -218,6 +218,7 @@ class PublishService:
         keyboard = moderation_keyboard(post_id, has_photos=bool(local_paths))
         message = await self._sender.send_moderation_draft(post.text, local_paths, keyboard)
         self._admin_msgs[post_id] = (message.chat.id, message.message_id)
+        log.info("draft sent to admin: post_id=%d photos=%d text_len=%d", post_id, len(local_paths), len(post.text))
 
     async def edit_draft_admin_message(self, post_id: int, new_text: str) -> None:
         ref = self._admin_msgs.get(post_id)
