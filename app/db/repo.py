@@ -279,15 +279,6 @@ async def posts_by_status(pool: asyncpg.Pool, statuses: list[PostStatus]) -> lis
     return [_post(row) for row in rows]
 
 
-async def recent_publish_times(pool: asyncpg.Pool, since: dt.datetime) -> list[dt.datetime]:
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT published_at FROM posts WHERE status = $1 AND published_at >= $2",
-            PostStatus.published.value, since,
-        )
-    return [row["published_at"] for row in rows]
-
-
 async def nearest_published_posts(
     pool: asyncpg.Pool,
     embedding,
@@ -317,9 +308,12 @@ async def reset_unfinished_news(pool: asyncpg.Pool) -> list[int]:
     """Delete unfinished posts and reset their news rows to pending for reprocessing.
 
     Unfinished = news not in a terminal state (published/duplicate/rejected/failed)
-    and not awaiting moderation. Returns the ids of reset news rows (ascending).
+    and not awaiting moderation or queued for publication. Requeues pending news
+    as well: their in-memory pipeline queue was lost on shutdown.
+    Returns the ids of reset news rows (ascending).
     """
     in_flight = [
+        NewsStatus.pending.value,
         NewsStatus.dedup.value,
         NewsStatus.photo_search.value,
         NewsStatus.writing.value,

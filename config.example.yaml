@@ -67,7 +67,4 @@ context:
 
 publish:
   mode: moderation        # auto | moderation
-  max_per_hour: 5
-  quiet_hours: "01:00-07:00"
-  timezone: "UTC"
   moderation_timeout_hours: 24

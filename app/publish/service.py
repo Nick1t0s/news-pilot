@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
-from collections import deque
-from zoneinfo import ZoneInfo
 
 import asyncpg
 
@@ -18,28 +16,8 @@ from app.textutil import plain_text
 log = logging.getLogger("publish")
 
 
-def parse_quiet_hours(value: str | None) -> tuple[dt.time, dt.time] | None:
-    if not value:
-        return None
-    start_raw, end_raw = value.split("-")
-
-    def _time(part: str) -> dt.time:
-        hour, minute = part.strip().split(":")
-        return dt.time(int(hour), int(minute))
-
-    return _time(start_raw), _time(end_raw)
-
-
-def in_quiet_hours(now: dt.datetime, window: tuple[dt.time, dt.time]) -> bool:
-    start, end = window
-    current = now.time()
-    if start <= end:
-        return start <= current < end
-    return current >= start or current < end
-
-
 class PublishService:
-    """Creates post drafts, applies rate limit/quiet hours, handles moderation."""
+    """Creates post drafts, publishes via queue worker, handles moderation."""
 
     def __init__(self, cfg: Settings, pool: asyncpg.Pool, sender, embeddings: EmbeddingProvider) -> None:
         self._cfg = cfg
@@ -47,7 +25,6 @@ class PublishService:
         self._sender = sender
         self._embeddings = embeddings
         self.queue: asyncio.Queue[int] = asyncio.Queue()
-        self._publish_times: deque[dt.datetime] = deque()
         self._admin_msgs: dict[int, tuple[int | None, int]] = {}
         self._post_retries: dict[int, int] = {}
 
@@ -72,11 +49,11 @@ class PublishService:
     async def _dispatch(self, post_id: int, news: News, note: str | None) -> None:
         if self._cfg.publish.mode == "moderation":
             await self.send_draft(post_id, note=note)
-            message = "draft sent to admin for moderation"
+            status, message = NewsStatus.moderation, "draft sent to admin for moderation"
         else:
             self.queue.put_nowait(post_id)
-            message = "queued for publication"
-        await repo.set_news_status(self._pool, news.id, NewsStatus.moderation, stage="publish", message=message)
+            status, message = NewsStatus.queued, "queued for publication"
+        await repo.set_news_status(self._pool, news.id, status, stage="publish", message=message)
 
     async def approve(self, post_id: int, *, drop_photos: bool = False) -> Post:
         post = await repo.get_post(self._pool, post_id)
@@ -118,7 +95,6 @@ class PublishService:
         while True:
             post_id = await self.queue.get()
             try:
-                await self._wait_slot()
                 await self.approve(post_id)
             except Exception as exc:
                 log.exception("publish failed: post_id=%s", post_id)
@@ -141,27 +117,6 @@ class PublishService:
             return
         self.queue.put_nowait(post_id)
         await asyncio.sleep(5.0 * retries)
-
-    async def _wait_slot(self) -> None:
-        window = parse_quiet_hours(self._cfg.publish.quiet_hours)
-        tz = ZoneInfo(self._cfg.publish.timezone)
-        while True:
-            now = dt.datetime.now(tz)
-            if window is not None and in_quiet_hours(now, window):
-                sleep_for = _seconds_until_quiet_end(now, window, tz)
-                log.info("quiet hours active, sleeping %.0fs", sleep_for)
-                await asyncio.sleep(sleep_for)
-                continue
-            cutoff = now.astimezone(dt.timezone.utc) - dt.timedelta(hours=1)
-            while self._publish_times and self._publish_times[0] < cutoff:
-                self._publish_times.popleft()
-            if len(self._publish_times) < self._cfg.publish.max_per_hour:
-                self._publish_times.append(now.astimezone(dt.timezone.utc))
-                return
-            oldest = self._publish_times[0]
-            sleep_for = max(1.0, (oldest + dt.timedelta(hours=1) - now.astimezone(dt.timezone.utc)).total_seconds())
-            log.info("rate limit reached (%d/hour), sleeping %.0fs", self._cfg.publish.max_per_hour, sleep_for)
-            await asyncio.sleep(sleep_for)
 
     async def run_moderation_watch(self) -> None:
         timeout = dt.timedelta(hours=self._cfg.publish.moderation_timeout_hours)
@@ -186,7 +141,6 @@ class PublishService:
             await asyncio.sleep(60.0)
 
     async def restore(self) -> None:
-        await self._restore_rate_limit()
         posts = await repo.posts_by_status(self._pool, [PostStatus.queued, PostStatus.draft])
         queued = [post for post in posts if post.status == PostStatus.queued]
         drafts = [post for post in posts if post.status == PostStatus.draft]
@@ -194,19 +148,14 @@ class PublishService:
             self.queue.put_nowait(post.id)
         for post in drafts:
             try:
-                await self.send_draft(post.id)
+                if self._cfg.publish.mode == "auto":
+                    await self.approve(post.id)
+                else:
+                    await self.send_draft(post.id)
             except Exception:
                 log.exception("failed to re-send draft after restart: post_id=%s", post.id)
         if queued or drafts:
             log.info("restored after restart: queued=%d drafts=%d", len(queued), len(drafts))
-
-    async def _restore_rate_limit(self) -> None:
-        since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)
-        self._publish_times = deque(
-            sorted(await repo.recent_publish_times(self._pool, since))
-        )
-        if self._publish_times:
-            log.info("rate limit window restored: %d posts in the last hour", len(self._publish_times))
 
     async def send_draft(self, post_id: int, note: str | None = None) -> None:
         post = await repo.get_post(self._pool, post_id)

@@ -51,3 +51,16 @@ async def test_default_publish_keeps_photos(settings, pool) -> None:
     assert sender.published[-1]["photos"] == ["data/images/y.jpg"]
     post = await repo.get_post(pool, post_id)
     assert post.status == PostStatus.published
+
+
+async def test_restore_in_auto_mode_approves_drafts(settings, pool) -> None:
+    settings.publish.mode = "auto"
+    service, sender = make_service(settings, pool)
+    post_id = await _make_post(pool, external_id="restore-1", photo=None)
+
+    await service.restore()
+
+    post = await repo.get_post(pool, post_id)
+    assert post.status == PostStatus.published
+    assert len(sender.published) == 1
+    assert sender.drafts == []

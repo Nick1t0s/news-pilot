@@ -10,6 +10,7 @@ class NewsStatus(str, enum.Enum):
     dedup = "dedup"
     photo_search = "photo_search"
     writing = "writing"
+    queued = "queued"
     moderation = "moderation"
     published = "published"
     duplicate = "duplicate"

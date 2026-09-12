@@ -79,7 +79,7 @@ RSS feeds → Poller → догрузка полного текста (trafilatu
       лимиты max_iterations/max_searches/max_images; 0 фото — валидный исход
   → [3] Поиск релевантных опубликованных постов (top-3, context.window_days)
   → [4] Генерация поста по prompts/style.md (structured output, ≤1000 символов, HTML)
-  → [5] Публикация: auto (rate-limit max_per_hour + quiet_hours, очередь)
+  → [5] Публикация: auto (сразу в очередь, без лимитов)
        или moderation (черновик админу: Опубликовать / Редактировать / Отклонить, таймаут 24ч)
   → пост + эмбеддинг сохраняются в БД постов
 ```

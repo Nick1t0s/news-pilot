@@ -59,7 +59,7 @@ def settings() -> Settings:
         dedup=DedupConfig(window_days=3, min_similarity=0.35, top_k=5, on_error="review"),
         photo_agent=PhotoAgentConfig(max_iterations=5, max_searches=3, max_images=4),
         context=ContextConfig(window_days=14, top_k=3, min_similarity=0.35),
-        publish=PublishConfig(mode="auto", max_per_hour=100, quiet_hours=None, timezone="UTC", moderation_timeout_hours=24),
+        publish=PublishConfig(mode="auto", moderation_timeout_hours=24),
     )
 
 

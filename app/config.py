@@ -96,24 +96,7 @@ class ContextConfig(ExtraForbid):
 
 class PublishConfig(ExtraForbid):
     mode: Literal["auto", "moderation"] = "moderation"
-    max_per_hour: int = 5
-    quiet_hours: str | None = None
-    timezone: str = "UTC"
     moderation_timeout_hours: float = 24.0
-
-    @field_validator("quiet_hours")
-    @classmethod
-    def _validate_quiet_hours(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        parts = value.split("-")
-        if len(parts) != 2:
-            raise ValueError(f"quiet_hours must look like '01:00-07:00', got {value!r}")
-        for part in parts:
-            hour, minute = part.strip().split(":")
-            if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
-                raise ValueError(f"bad time component in quiet_hours: {part!r}")
-        return value
 
 
 class Settings(BaseSettings):
