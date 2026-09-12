@@ -31,21 +31,29 @@ class TelegramSender:
     def __init__(self, bot: Bot, cfg: Settings) -> None:
         self._bot = bot
         self._cfg = cfg
-        self._channel = parse_chat_id(cfg.telegram.channel_id)
         raw = cfg.telegram.channel_id.strip()
+        self._channel = parse_chat_id(raw)
         self._public_username: str | None = raw.lstrip("@") if raw.startswith("@") else None
+        self._private_prefix: str | None = None
+        if self._public_username is None and str(self._channel).startswith("-100"):
+            self._private_prefix = f"https://t.me/c/{str(self._channel)[4:]}"
         self._admin = cfg.telegram.admin_id
+
+    def tg_url(self, message_id: int) -> str | None:
+        if self._public_username:
+            return f"https://t.me/{self._public_username}/{message_id}"
+        if self._private_prefix:
+            return f"{self._private_prefix}/{message_id}"
+        return None
 
     async def send_to_channel(self, text: str, photos: list[str]) -> tuple[int, str | None]:
         paths = [p for p in photos if p and Path(p).exists()]
         if paths:
             message_id = await self._send_with_photos(self._channel, text, paths)
         else:
-            message_id = await self._send_text(self._channel, text)
-        tg_url = None
-        if self._public_username:
-            tg_url = f"https://t.me/{self._public_username}/{message_id}"
-        return message_id, tg_url
+            message = await self._send_text(self._channel, text)
+            message_id = message.message_id
+        return message_id, self.tg_url(message_id)
 
     async def send_moderation_draft(self, text: str, photos: list[str], keyboard: InlineKeyboardMarkup) -> Message:
         paths = [p for p in photos if p and Path(p).exists()]

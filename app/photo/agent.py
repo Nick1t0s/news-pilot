@@ -20,6 +20,8 @@ from app.photo.tavily_client import TavilyImageSearch
 
 log = logging.getLogger("photo_agent")
 
+MAX_INLINE_IMAGES = 2
+
 SYSTEM_PROMPT = (
     "Ты — фото-редактор новостного Telegram-канала. Твоя задача — подобрать 1–4 фотографии к новости.\n"
     "Правила:\n"
@@ -140,6 +142,7 @@ class PhotoAgent:
         iterations = self._cfg.photo_agent.max_iterations
 
         for _ in range(iterations):
+            _prune_inline_images(messages, MAX_INLINE_IMAGES)
             completion = await self._llm.chat(messages, tools=TOOLS, temperature=0.2)
             message = completion.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
@@ -264,6 +267,17 @@ class PhotoAgent:
         if len(data) > MAX_IMAGE_BYTES:
             return None
         return data
+
+
+def _prune_inline_images(messages: list[dict], keep: int) -> None:
+    indices = [
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message.get("content"), list)
+        and any(isinstance(part, dict) and part.get("type") == "image_url" for part in message["content"])
+    ]
+    for index in indices[:-keep]:
+        messages[index]["content"] = "Изображение было приложено ранее и уже оценено."
 
 
 def _news_prompt(news: News, max_searches: int) -> str:

@@ -14,8 +14,8 @@ from app.bot.handlers import build_dispatcher
 from app.config import get_settings, project_root
 from app.context import AppContext
 from app.context_search import ContextSearch
-from app.db.base import create_pool, init_schema
 from app.db import repo
+from app.db.base import create_pool, init_schema
 from app.dedup import DedupService
 from app.fetcher import fetch_article  # noqa: F401  (kept for monkeypatching in tests)
 from app.generator import PostGenerator

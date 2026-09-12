@@ -59,9 +59,16 @@ class PublishService:
         post = await repo.get_post(self._pool, post_id)
         if post is None:
             raise LookupError(f"post {post_id} not found")
-        images = await repo.get_post_images(self._pool, post_id)
-        local_paths = [] if drop_photos else [image.local_path for image in images if image.local_path]
-        message_id, tg_url = await self._sender.send_to_channel(post.text, local_paths)
+        if post.tg_message_id is not None:
+            message_id = post.tg_message_id
+            tg_url = post.tg_url
+            photos_count = 0
+        else:
+            images = await repo.get_post_images(self._pool, post_id)
+            local_paths = [] if drop_photos else [image.local_path for image in images if image.local_path]
+            photos_count = len(local_paths)
+            message_id, tg_url = await self._sender.send_to_channel(post.text, local_paths)
+            await repo.set_post_tg_message(self._pool, post_id, message_id, tg_url)
         embedding = await self._safe_embed(post.text)
         await repo.update_post_published(
             self._pool, post_id, tg_message_id=message_id, tg_url=tg_url, embedding=embedding,
@@ -72,7 +79,7 @@ class PublishService:
             stage="publish", message=f"published{note} {tg_url or message_id}",
         )
         self._post_retries.pop(post_id, None)
-        log.info("published: post_id=%d message_id=%d photos=%d", post_id, message_id, len(local_paths))
+        log.info("published: post_id=%d message_id=%d photos=%d", post_id, message_id, photos_count)
         return await repo.get_post(self._pool, post_id)
 
     async def reject(self, post_id: int, reason: str) -> None:

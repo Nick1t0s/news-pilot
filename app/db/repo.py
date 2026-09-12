@@ -233,6 +233,14 @@ async def update_post_text(pool: asyncpg.Pool, post_id: int, text: str) -> None:
         await conn.execute("UPDATE posts SET text = $2 WHERE id = $1", post_id, text)
 
 
+async def set_post_tg_message(pool: asyncpg.Pool, post_id: int, tg_message_id: int, tg_url: str | None) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE posts SET tg_message_id = $2, tg_url = $3 WHERE id = $1",
+            post_id, tg_message_id, tg_url,
+        )
+
+
 async def update_post_published(
     pool: asyncpg.Pool,
     post_id: int,
