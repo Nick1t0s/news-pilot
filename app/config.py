@@ -68,6 +68,12 @@ class TelegramConfig(ExtraForbid):
     channel_id: str = "@channel"
     admin_id: int = 0
 
+    @field_validator("channel_id", mode="before")
+    @classmethod
+    def _coerce_channel_id(cls, value: object) -> object:
+        # numeric channel ids (-100...) come from YAML as int
+        return str(value) if isinstance(value, int) else value
+
 
 class DedupConfig(ExtraForbid):
     window_days: int = 3
@@ -110,10 +116,6 @@ class PublishConfig(ExtraForbid):
         return value
 
 
-class PipelineConfig(ExtraForbid):
-    workers: int = 2
-
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=os.environ.get("ENV_FILE", ".env"),
@@ -137,7 +139,6 @@ class Settings(BaseSettings):
     photo_agent: PhotoAgentConfig = Field(default_factory=PhotoAgentConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
-    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
     @classmethod
     def settings_customise_sources(

@@ -12,7 +12,6 @@ from app.config import (
     FetcherConfig,
     LLMConfig,
     PhotoAgentConfig,
-    PipelineConfig,
     PublishConfig,
     RssConfig,
     Settings,
@@ -55,7 +54,6 @@ def make_settings() -> Settings:
         photo_agent=PhotoAgentConfig(),
         context=ContextConfig(min_similarity=0.35),
         publish=PublishConfig(mode="auto", max_per_hour=100),
-        pipeline=PipelineConfig(workers=2),
     )
 
 

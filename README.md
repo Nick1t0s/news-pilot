@@ -62,7 +62,7 @@ PostgreSQL должен слушать TCP (в `postgresql.conf`: `listen_addres
 ## Конфигурация
 
 - `config.yaml` — все параметры (см. `config.example.yaml`): llm, embeddings, rss, fetcher,
-  database, tavily, telegram, dedup, photo_agent, context, publish, pipeline.
+  database, tavily, telegram, dedup, photo_agent, context, publish.
 - `.env` — секреты, переопределяют YAML: `LLM__API_KEY`, `TAVILY__API_KEY`,
   `TELEGRAM__BOT_TOKEN`, `DATABASE__DSN` (вложенность — через `__`).
 - Смена `publish.mode` (`auto` | `moderation`) — только конфиг + рестарт, код менять не нужно.
@@ -84,7 +84,8 @@ RSS feeds → Poller → догрузка полного текста (trafilatu
   → пост + эмбеддинг сохраняются в БД постов
 ```
 
-Очередь — `asyncio.Queue` + воркеры (`pipeline.workers`). Сбой одного этапа помечает новость
+Очередь — `asyncio.Queue` между poller и pipeline; новости обрабатываются последовательно,
+по одной за раз. Сбой одного этапа помечает новость
 `status=failed` и не роняет очередь. Сбой фото/Tavily не блокирует публикацию текстового поста.
 
 ## Статусы новости
@@ -142,7 +143,7 @@ app/
   providers/            LLMProvider, EmbeddingProvider, retry
   rss/                  парсинг фидов + poller
   fetcher.py            trafilatura
-  pipeline/processor.py очередь + воркеры + статусы
+  pipeline/processor.py очередь + последовательная обработка + статусы
   dedup.py              векторный поиск + LLM-вердикт
   context_search.py     поиск прошлых постов канала
   generator.py          генерация текста поста

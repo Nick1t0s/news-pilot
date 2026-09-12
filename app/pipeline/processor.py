@@ -35,8 +35,9 @@ class Pipeline:
         self._generator = generator
         self._publisher = publisher
 
-    async def run_worker(self, worker_id: int = 0) -> None:
-        log.info("worker started: id=%d", worker_id)
+    async def run(self) -> None:
+        """Sequential pipeline loop: processes one news item at a time."""
+        log.info("pipeline loop started")
         while True:
             news_id = await self._queue.get()
             try:

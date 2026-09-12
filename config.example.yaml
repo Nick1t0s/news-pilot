@@ -71,6 +71,3 @@ publish:
   quiet_hours: "01:00-07:00"
   timezone: "UTC"
   moderation_timeout_hours: 24
-
-pipeline:
-  workers: 2

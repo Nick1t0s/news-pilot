@@ -39,7 +39,7 @@ async def run() -> None:
         log.error("telegram.bot_token is missing (set TELEGRAM__BOT_TOKEN in .env)")
         raise SystemExit(2)
 
-    pool = await create_pool(cfg.database.dsn, min_size=1, max_size=max(5, cfg.pipeline.workers + 3))
+    pool = await create_pool(cfg.database.dsn, min_size=1, max_size=8)
     await init_schema(pool, cfg.embeddings.dimensions)
 
     http = httpx.AsyncClient(
@@ -81,18 +81,14 @@ async def run() -> None:
 
     tasks = [
         asyncio.create_task(poller.run_forever(), name="poller"),
-        *(
-            asyncio.create_task(pipeline.run_worker(worker_id), name=f"worker-{worker_id}")
-            for worker_id in range(cfg.pipeline.workers)
-        ),
+        asyncio.create_task(pipeline.run(), name="pipeline"),
         asyncio.create_task(publisher.run_queue_worker(), name="publish-queue"),
         asyncio.create_task(publisher.run_moderation_watch(), name="moderation-watch"),
         asyncio.create_task(dp.start_polling(bot, handle_signals=False), name="telegram"),
     ]
     log.info(
-        "news-pilot started: feeds=%d workers=%d mode=%s",
+        "news-pilot started: feeds=%d mode=%s",
         len(cfg.rss.feeds),
-        cfg.pipeline.workers,
         cfg.publish.mode,
     )
 
