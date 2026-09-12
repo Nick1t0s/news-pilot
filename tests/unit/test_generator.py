@@ -55,6 +55,7 @@ def make_cfg():
     from app.config import ContextConfig, LLMConfig, Settings
 
     return Settings(
+        _env_file=None,
         llm=LLMConfig(temperature=0.3, retries=2),
         context=ContextConfig(),
     )

@@ -17,7 +17,7 @@ def make_news(news_id: int = 1):
 def make_agent(llm: FakeLLM, tavily) -> PhotoAgent:
     from app.config import Settings
 
-    cfg = Settings()
+    cfg = Settings(_env_file=None)
     return PhotoAgent(cfg, llm, tavily, http=None, images_dir=SimpleNamespace())
 
 
