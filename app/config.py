@@ -25,6 +25,7 @@ class LLMConfig(ExtraForbid):
     temperature: float = 0.4
     timeout_seconds: float = 120.0
     retries: int = 3
+    extra_headers: dict[str, str] = Field(default_factory=dict)
 
 
 class EmbeddingsConfig(ExtraForbid):

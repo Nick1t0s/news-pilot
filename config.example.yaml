@@ -11,6 +11,8 @@ llm:
   temperature: 0.4
   timeout_seconds: 120
   retries: 3
+  # extra_headers:                    # кастомные заголовки (шлюзы с сессионной авторизацией)
+  #   x-opencode-session: "my-session-id"
   # api_key: set in .env (LLM__API_KEY)
 
 embeddings:

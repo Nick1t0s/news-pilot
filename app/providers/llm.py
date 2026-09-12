@@ -35,6 +35,7 @@ class LLMProvider:
             base_url=cfg.base_url,
             timeout=cfg.timeout_seconds,
             max_retries=0,
+            default_headers=cfg.extra_headers or None,
         )
 
     async def chat(
