@@ -67,7 +67,8 @@ class PublishService:
             images = await repo.get_post_images(self._pool, post_id)
             local_paths = [] if drop_photos else [image.local_path for image in images if image.local_path]
             photos_count = len(local_paths)
-            message_id, tg_url = await self._sender.send_to_channel(post.text, local_paths)
+            reply_to = await self._resolve_reply_target(post_id)
+            message_id, tg_url = await self._sender.send_to_channel(post.text, local_paths, reply_to=reply_to)
             await repo.set_post_tg_message(self._pool, post_id, message_id, tg_url)
         embedding = await self._safe_embed(post.text)
         await repo.update_post_published(
@@ -81,6 +82,21 @@ class PublishService:
         self._post_retries.pop(post_id, None)
         log.info("published: post_id=%d message_id=%d photos=%d", post_id, message_id, photos_count)
         return await repo.get_post(self._pool, post_id)
+
+    async def _resolve_reply_target(self, post_id: int) -> int | None:
+        referenced_ids = await repo.get_post_references(self._pool, post_id)
+        if not referenced_ids:
+            return None
+        epoch = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+        posts = []
+        for pid in referenced_ids:
+            post = await repo.get_post(self._pool, pid)
+            if post is not None and post.tg_message_id is not None:
+                posts.append(post)
+        if not posts:
+            return None
+        freshest = max(posts, key=lambda post: (post.published_at or epoch, post.id))
+        return freshest.tg_message_id
 
     async def reject(self, post_id: int, reason: str) -> None:
         post = await repo.get_post(self._pool, post_id)

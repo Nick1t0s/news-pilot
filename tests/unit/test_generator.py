@@ -67,7 +67,7 @@ async def test_generate_with_references(tmp_path) -> None:
     llm = FakeLLM()
     llm.push_json(
         {
-            "text": 'Как мы <a href="https://t.me/ch/5">писали ранее</a>, мост открыт',
+            "text": "Как мы писали ранее, мост открыт",
             "references_post_ids": [5, 999],
         }
     )
@@ -79,7 +79,24 @@ async def test_generate_with_references(tmp_path) -> None:
     assert draft.reference_ids == [5]
     user_prompt = llm.json_calls[0]["user"]
     assert "[id=5]" in user_prompt
-    assert "https://t.me/ch/5" in user_prompt
+    assert "t.me" not in user_prompt
+
+
+async def test_generate_strips_bare_tme_urls(tmp_path) -> None:
+    style_file = tmp_path / "style.md"
+    style_file.write_text(STYLE, encoding="utf-8")
+    llm = FakeLLM()
+    llm.push_json(
+        {
+            "text": "Обновление по мосту (https://t.me/c/123/45) и всё",
+            "references_post_ids": [],
+        }
+    )
+    generator = PostGenerator(make_cfg(), llm, style_file)
+
+    draft = await generator.generate(make_news(), related=[])
+
+    assert draft.text == "Обновление по мосту и всё"
 
 
 async def test_generate_shortens_long_text(tmp_path) -> None:

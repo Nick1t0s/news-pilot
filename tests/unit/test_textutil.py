@@ -9,8 +9,15 @@ from app.textutil import (
 
 
 def test_sanitize_keeps_allowed_tags() -> None:
-    raw = '<b>Жирный</b> и <a href="https://t.me/x/1">ссылка</a>'
+    raw = "<b>Жирный</b> и <a href=\"https://example.com/x\">ссылка</a>"
     assert sanitize_telegram_html(raw) == raw
+
+
+def test_sanitize_drops_tme_links_but_keeps_text() -> None:
+    raw = 'Как мы <a href="https://t.me/channel/21">писали ранее</a>'
+    result = sanitize_telegram_html(raw)
+    assert "t.me" not in result
+    assert "писали ранее" in result
 
 
 def test_sanitize_drops_disallowed_tags_but_keeps_text() -> None:
@@ -71,9 +78,9 @@ def test_truncate_html_cuts_to_limit() -> None:
 
 def test_truncate_html_keeps_links() -> None:
     text = "Как мы писали ранее " + " ".join(["слово"] * 100)
-    raw = f'<a href="https://t.me/x/1">писали ранее</a> {text}'
+    raw = f'<a href="https://example.com/x">писали ранее</a> {text}'
     result = truncate_html(raw, 30)
-    assert '<a href="https://t.me/x/1">' in result
+    assert '<a href="https://example.com/x">' in result
     assert result.rstrip().endswith("</a>")
 
 

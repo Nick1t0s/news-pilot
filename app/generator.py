@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -15,6 +16,9 @@ log = logging.getLogger("generator")
 MAX_POST_LENGTH = 1000
 MIN_POST_LENGTH = 200
 
+_TME_URL_RE = re.compile(r"https?://(?:t\.me|telegram\.me)/[^\s)]*", re.IGNORECASE)
+_EMPTY_PARENS_RE = re.compile(r"\(\s*\)")
+
 DEFAULT_STYLE = (
     "Ты — админ новостного Telegram-канала. Пишешь посты живым языком: коротко, по делу, "
     "без канцелярита и кликбейта."
@@ -25,9 +29,11 @@ GENERATION_RULES = """
 ТРЕБОВАНИЯ К ПОСТУ:
 - Напиши пост в стиле канала (см. стайл-гайд), а не пересказ источника.
 - Используй только факты из приведённой новости. Ничего не выдумывай и не добавляй детали, которых нет в тексте.
-- Разметка — HTML Telegram: разрешены <b>, <i>, <u>, <s>, <a href="...">, <code>, <pre>. Заголовки и списки запрещены.
+- Разметка — HTML Telegram: разрешены <b>, <i>, <u>, <s>, <code>, <pre>. Заголовки, списки и любые ссылки запрещены.
 - Длина текста не более 1000 символов (лимит caption при фото).
-- Если найденные прошлые посты канала посвящены развитию этой же истории — это продолжение темы: прямо укажи это («Как мы писали ранее…»). Ссылку на прошлый пост ставь только если в списке есть реальная t.me-ссылка — используй её как есть. Выдумывать или конструировать URL запрещено: если ссылки нет, пиши без неё. Его id включи в references_post_ids.
+- Если найденные прошлые посты канала посвящены развитию этой же истории — это продолжение темы: начни с «Как мы писали ранее…», а id прошлого поста включи в references_post_ids. Ссылку в тексте НЕ вставляй — бот сам отправит пост ответом на прошлый.
+- В посте-продолжении рассказывай только о новых фактах (то, чего не было в прошлом посте). Не повторяй уже известные детали, цифры и статусы из прошлого поста.
+- Никаких URL и ссылок в тексте поста — запрещено.
 - Если это не продолжение — references_post_ids верни пустым списком.
 """
 
@@ -65,7 +71,7 @@ class PostGenerator:
             schema_name="channel_post",
             temperature=self._cfg.llm.temperature,
         )
-        text = sanitize_telegram_html(str(data.get("text") or ""))
+        text = sanitize_telegram_html(_strip_tme_urls(str(data.get("text") or "")))
         if not text:
             raise LLMError("generator returned empty post text")
         if len(text) > MAX_POST_LENGTH:
@@ -85,7 +91,7 @@ class PostGenerator:
                 schema_name="channel_post",
                 temperature=0.2,
             )
-            text = sanitize_telegram_html(str(data.get("text") or ""))
+            text = sanitize_telegram_html(_strip_tme_urls(str(data.get("text") or "")))
             if MIN_POST_LENGTH <= len(text) <= MAX_POST_LENGTH:
                 return text
         except LLMError:
@@ -103,6 +109,12 @@ class PostGenerator:
         return content
 
 
+def _strip_tme_urls(text: str) -> str:
+    cleaned = _TME_URL_RE.sub("", text)
+    cleaned = _EMPTY_PARENS_RE.sub("", cleaned)
+    return re.sub(r"[ \t]{2,}", " ", cleaned)
+
+
 def _build_user_prompt(news, related: Sequence[Post]) -> str:
     lines = [
         "НОВОСТЬ:",
@@ -114,7 +126,7 @@ def _build_user_prompt(news, related: Sequence[Post]) -> str:
         lines.append("")
         lines.append("ПРОШЛЫЕ ПОСТЫ КАНАЛА, ПОХОЖИЕ ПО ТЕМЕ:")
         for post in related:
-            lines.append(f"[id={post.id}] ({_fmt_date(post.created_at)}) {post.tg_url or '(ссылка недоступна — не вставляй ссылку на этот пост)'}")
+            lines.append(f"[id={post.id}] ({_fmt_date(post.created_at)})")
             lines.append(f"Текст поста: {post.text[:1500]}")
     return "\n".join(lines)
 

@@ -60,6 +60,8 @@ class _Sanitizer(HTMLParser):
 
 def _safe_href(href: str) -> bool:
     lowered = href.lower()
+    if "t.me/" in lowered or "telegram.me/" in lowered:
+        return False
     return lowered.startswith(("http://", "https://", "tg://"))
 
 

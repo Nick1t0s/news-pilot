@@ -10,7 +10,13 @@ from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
 )
-from aiogram.types import FSInputFile, InlineKeyboardMarkup, InputMediaPhoto, Message
+from aiogram.types import (
+    FSInputFile,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Message,
+    ReplyParameters,
+)
 
 from app.config import Settings
 from app.textutil import plain_text
@@ -46,12 +52,13 @@ class TelegramSender:
             return f"{self._private_prefix}/{message_id}"
         return None
 
-    async def send_to_channel(self, text: str, photos: list[str]) -> tuple[int, str | None]:
+    async def send_to_channel(self, text: str, photos: list[str], reply_to: int | None = None) -> tuple[int, str | None]:
+        reply_parameters = ReplyParameters(message_id=reply_to) if reply_to else None
         paths = [p for p in photos if p and Path(p).exists()]
         if paths:
-            message_id = await self._send_with_photos(self._channel, text, paths)
+            message_id = await self._send_with_photos(self._channel, text, paths, reply_parameters=reply_parameters)
         else:
-            message = await self._send_text(self._channel, text)
+            message = await self._send_text(self._channel, text, reply_parameters=reply_parameters)
             message_id = message.message_id
         return message_id, self.tg_url(message_id)
 
@@ -78,18 +85,27 @@ class TelegramSender:
                 raise
             await self._call(self._bot.edit_message_text, chat_id=chat_id, message_id=message_id, text=plain_text(text))
 
-    async def _send_text(self, chat_id, text: str, keyboard: InlineKeyboardMarkup | None = None) -> Message:
+    async def _send_text(
+        self, chat_id, text: str, keyboard: InlineKeyboardMarkup | None = None,
+        reply_parameters: ReplyParameters | None = None,
+    ) -> Message:
         try:
             return await self._call(
                 self._bot.send_message, chat_id=chat_id, text=text, parse_mode="HTML",
-                reply_markup=keyboard,
+                reply_markup=keyboard, reply_parameters=reply_parameters,
             )
         except TelegramBadRequest as exc:
             if "parse" not in str(exc).lower():
                 raise
-            return await self._call(self._bot.send_message, chat_id=chat_id, text=text, reply_markup=keyboard)
+            return await self._call(
+                self._bot.send_message, chat_id=chat_id, text=text,
+                reply_markup=keyboard, reply_parameters=reply_parameters,
+            )
 
-    async def _send_with_photos(self, chat_id, caption: str, paths: list[str]) -> int:
+    async def _send_with_photos(
+        self, chat_id, caption: str, paths: list[str],
+        reply_parameters: ReplyParameters | None = None,
+    ) -> int:
         if len(paths) == 1:
             try:
                 message = await self._call(
@@ -98,6 +114,7 @@ class TelegramSender:
                     photo=FSInputFile(paths[0]),
                     caption=caption or None,
                     parse_mode="HTML" if caption else None,
+                    reply_parameters=reply_parameters,
                 )
                 return message.message_id
             except TelegramBadRequest as exc:
@@ -108,6 +125,7 @@ class TelegramSender:
                     chat_id=chat_id,
                     photo=FSInputFile(paths[0]),
                     caption=plain_text(caption) if caption else None,
+                    reply_parameters=reply_parameters,
                 )
                 return message.message_id
         media = [
@@ -119,14 +137,20 @@ class TelegramSender:
             for index, path in enumerate(paths)
         ]
         try:
-            messages = await self._call(self._bot.send_media_group, chat_id=chat_id, media=media)
+            messages = await self._call(
+                self._bot.send_media_group, chat_id=chat_id, media=media,
+                reply_parameters=reply_parameters,
+            )
             return messages[0].message_id
         except TelegramBadRequest as exc:
             if "parse" not in str(exc).lower():
                 raise
             media[0].caption = plain_text(caption)
             media[0].parse_mode = None
-            messages = await self._call(self._bot.send_media_group, chat_id=chat_id, media=media)
+            messages = await self._call(
+                self._bot.send_media_group, chat_id=chat_id, media=media,
+                reply_parameters=reply_parameters,
+            )
             return messages[0].message_id
 
     async def _call(self, method, **kwargs):

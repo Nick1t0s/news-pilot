@@ -64,3 +64,28 @@ async def test_restore_in_auto_mode_approves_drafts(settings, pool) -> None:
     assert post.status == PostStatus.published
     assert len(sender.published) == 1
     assert sender.drafts == []
+
+
+async def test_approve_replies_to_freshest_reference(settings, pool) -> None:
+    service, sender = make_service(settings, pool)
+    post1 = await _make_post(pool, external_id="ref-1", photo=None)
+    post2 = await _make_post(pool, external_id="ref-2", photo=None)
+    post3 = await _make_post(pool, external_id="ref-3", photo=None)
+    await service.approve(post1)
+    await service.approve(post2)
+    await repo.add_post_references(pool, post3, [post1, post2])
+
+    await service.approve(post3)
+
+    assert sender.published[-1]["reply_to"] == sender.published[-2]["message_id"]
+
+
+async def test_reply_skipped_when_reference_unpublished(settings, pool) -> None:
+    service, sender = make_service(settings, pool)
+    post1 = await _make_post(pool, external_id="refx-1", photo=None)
+    post2 = await _make_post(pool, external_id="refx-2", photo=None)
+    await repo.add_post_references(pool, post2, [post1])
+
+    await service.approve(post2)
+
+    assert sender.published[-1]["reply_to"] is None

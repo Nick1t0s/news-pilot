@@ -228,6 +228,15 @@ async def add_post_references(pool: asyncpg.Pool, post_id: int, referenced_ids: 
         )
 
 
+async def get_post_references(pool: asyncpg.Pool, post_id: int) -> list[int]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT referenced_post_id FROM post_references WHERE post_id = $1",
+            post_id,
+        )
+    return [int(row["referenced_post_id"]) for row in rows]
+
+
 async def update_post_text(pool: asyncpg.Pool, post_id: int, text: str) -> None:
     async with pool.acquire() as conn:
         await conn.execute("UPDATE posts SET text = $2 WHERE id = $1", post_id, text)
