@@ -18,3 +18,4 @@ data/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+page_test/
