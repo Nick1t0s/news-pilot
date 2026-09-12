@@ -8,12 +8,20 @@ from tavily import TavilyClient
 log = logging.getLogger("tavily")
 
 
+def _proxies(proxy: str) -> dict[str, str] | None:
+    if not proxy:
+        return None
+    # socks5h:// resolves DNS through the proxy
+    url = proxy.replace("socks5://", "socks5h://", 1) if proxy.startswith("socks5://") else proxy
+    return {"http": url, "https": url}
+
+
 class TavilyImageSearch:
     """Async wrapper around the sync tavily-python client."""
 
-    def __init__(self, api_key: str, *, timeout: float = 30.0, retries: int = 3) -> None:
+    def __init__(self, api_key: str, *, timeout: float = 30.0, retries: int = 3, proxy: str = "") -> None:
         self.enabled = bool(api_key)
-        self._client = TavilyClient(api_key=api_key) if api_key else None
+        self._client = TavilyClient(api_key=api_key, proxies=_proxies(proxy)) if api_key else None
         self._timeout = timeout
         self._retries = retries
 
@@ -33,7 +41,7 @@ class TavilyImageSearch:
         try:
             result = await asyncio.wait_for(asyncio.to_thread(run), timeout=self._timeout + 10)
         except Exception as exc:  # noqa: BLE001
-            log.warning("tavily search failed: %s", exc)
+            log.warning("tavily search failed: %s: %s", type(exc).__name__, exc)
             return []
         images = result.get("images") or []
         urls: list[str] = []

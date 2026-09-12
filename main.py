@@ -31,6 +31,22 @@ from app.rss.poller import FeedPoller
 
 log = logging.getLogger("main")
 
+# Some CDNs (e.g. hcdn) return 403 for non-browser-looking clients; news-pilot/1.0 UA is not enough.
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+}
+
+
+def _make_http(cfg, proxy: str, timeout: float) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=timeout,
+        headers=BROWSER_HEADERS,
+        proxy=proxy or None,
+    )
+
 
 async def run() -> None:
     cfg = get_settings()
@@ -43,30 +59,10 @@ async def run() -> None:
     pool = await create_pool(cfg.database.dsn, min_size=1, max_size=8)
     await init_schema(pool, cfg.embeddings.dimensions)
 
-    http = httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=cfg.fetcher.timeout_seconds,
-        headers={"User-Agent": "news-pilot/1.0 (+https://github.com/news-pilot)"},
-        proxy=cfg.fetcher.proxy or None,
-    )
-    http_embed = httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=cfg.embeddings.timeout_seconds,
-        headers={"User-Agent": "news-pilot/1.0 (+https://github.com/news-pilot)"},
-        proxy=cfg.embeddings.proxy or None,
-    )
-    http_photo = httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=cfg.fetcher.timeout_seconds,
-        headers={"User-Agent": "news-pilot/1.0 (+https://github.com/news-pilot)"},
-        proxy=cfg.photo_agent.proxy or None,
-    )
-    http_publish = httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=cfg.fetcher.timeout_seconds,
-        headers={"User-Agent": "news-pilot/1.0 (+https://github.com/news-pilot)"},
-        proxy=cfg.publish.proxy or None,
-    )
+    http = _make_http(cfg, cfg.fetcher.proxy, cfg.fetcher.timeout_seconds)
+    http_embed = _make_http(cfg, cfg.embeddings.proxy, cfg.embeddings.timeout_seconds)
+    http_photo = _make_http(cfg, cfg.photo_agent.proxy, cfg.fetcher.timeout_seconds)
+    http_publish = _make_http(cfg, cfg.publish.proxy, cfg.fetcher.timeout_seconds)
     llm = LLMProvider(cfg.llm)
     embeddings = EmbeddingProvider(cfg.embeddings, http_embed)
 
@@ -75,6 +71,7 @@ async def run() -> None:
         cfg.tavily.api_key,
         timeout=cfg.tavily.timeout_seconds,
         retries=cfg.tavily.retries,
+        proxy=cfg.tavily.proxy,
     )
     photo_agent = PhotoAgent(cfg, llm, tavily, http_photo)
     context_search = ContextSearch(cfg, pool, embeddings)

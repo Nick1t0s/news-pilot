@@ -65,6 +65,7 @@ class TavilyConfig(ExtraForbid):
     api_key: str = ""
     timeout_seconds: float = 30.0
     retries: int = 3
+    proxy: str = ""
 
 
 class TelegramConfig(ExtraForbid):
