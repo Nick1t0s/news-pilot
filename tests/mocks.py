@@ -91,7 +91,7 @@ class FakeSender:
 
     async def send_to_channel(self, text: str, photos: list[str]) -> tuple[int, str]:
         self._counter += 1
-        self.published.append({"text": text, "photos": list(photos)})
+        self.published.append({"text": text, "photos": list(photos), "message_id": self._counter})
         return self._counter, f"https://t.me/testchannel/{self._counter}"
 
     async def send_moderation_draft(self, text: str, photos: list[str], keyboard):

@@ -78,23 +78,24 @@ class PublishService:
             message = "queued for publication"
         await repo.set_news_status(self._pool, news.id, NewsStatus.moderation, stage="publish", message=message)
 
-    async def approve(self, post_id: int) -> Post:
+    async def approve(self, post_id: int, *, drop_photos: bool = False) -> Post:
         post = await repo.get_post(self._pool, post_id)
         if post is None:
             raise LookupError(f"post {post_id} not found")
         images = await repo.get_post_images(self._pool, post_id)
-        local_paths = [image.local_path for image in images if image.local_path]
+        local_paths = [] if drop_photos else [image.local_path for image in images if image.local_path]
         message_id, tg_url = await self._sender.send_to_channel(post.text, local_paths)
         embedding = await self._safe_embed(post.text)
         await repo.update_post_published(
             self._pool, post_id, tg_message_id=message_id, tg_url=tg_url, embedding=embedding,
         )
+        note = " without photos" if drop_photos else ""
         await repo.set_news_status(
             self._pool, post.news_id, NewsStatus.published,
-            stage="publish", message=f"published {tg_url or message_id}",
+            stage="publish", message=f"published{note} {tg_url or message_id}",
         )
         self._post_retries.pop(post_id, None)
-        log.info("published: post_id=%d message_id=%d", post_id, message_id)
+        log.info("published: post_id=%d message_id=%d photos=%d", post_id, message_id, len(local_paths))
         return await repo.get_post(self._pool, post_id)
 
     async def reject(self, post_id: int, reason: str) -> None:
@@ -205,7 +206,7 @@ class PublishService:
         images = await repo.get_post_images(self._pool, post_id)
         local_paths = [image.local_path for image in images if image.local_path]
 
-        keyboard = moderation_keyboard(post_id)
+        keyboard = moderation_keyboard(post_id, has_photos=bool(local_paths))
         message = await self._sender.send_moderation_draft(post.text, local_paths, keyboard)
         self._admin_msgs[post_id] = (message.chat.id, message.message_id)
 

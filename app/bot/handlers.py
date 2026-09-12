@@ -72,6 +72,28 @@ def _admin_router(cfg: Settings) -> Router:
             except Exception:
                 log.exception("failed to edit admin message after publish")
 
+    @router.callback_query(F.data.startswith("mod:nophoto:"))
+    async def approve_without_photos(callback: CallbackQuery, ctx) -> None:
+        post_id = _post_id(callback)
+        if post_id is None:
+            await callback.answer("Некорректные данные")
+            return
+        await callback.answer("Публикую без фото…")
+        try:
+            post = await ctx.publisher.approve(post_id, drop_photos=True)
+        except Exception as exc:
+            log.exception("publish without photos failed: post_id=%s", post_id)
+            await callback.answer(f"Ошибка публикации: {exc}", show_alert=True)
+            return
+        ref = ctx.publisher.pop_admin_message(post_id)
+        if ref is not None:
+            chat_id, message_id = ref
+            link = post.tg_url or f"id {post.tg_message_id}"
+            try:
+                await ctx.sender.edit_message(chat_id, message_id, f"✅ Опубликовано без фото: {link}")
+            except Exception:
+                log.exception("failed to edit admin message after publish without photos")
+
     @router.callback_query(F.data.startswith("mod:reject:"))
     async def reject(callback: CallbackQuery, ctx) -> None:
         post_id = _post_id(callback)
