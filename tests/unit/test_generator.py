@@ -86,14 +86,30 @@ async def test_generate_shortens_long_text(tmp_path) -> None:
     style_file.write_text(STYLE, encoding="utf-8")
     llm = FakeLLM()
     llm.push_json({"text": "длинный " * 300, "references_post_ids": []})
-    llm.push_json({"text": "короткий пост", "references_post_ids": []})
+    llm.push_json({"text": "Короткий пост про мост " * 12, "references_post_ids": []})
     generator = PostGenerator(make_cfg(), llm, style_file)
 
     draft = await generator.generate(make_news(), related=[])
 
     assert len(draft.text) <= MAX_POST_LENGTH
-    assert draft.text == "короткий пост"
+    assert draft.text == ("Короткий пост про мост " * 12).strip()
     assert len(llm.json_calls) == 2
+
+
+async def test_generate_shorten_rejects_too_short_text(tmp_path) -> None:
+    style_file = tmp_path / "style.md"
+    style_file.write_text(STYLE, encoding="utf-8")
+    llm = FakeLLM()
+    original = "Осмысленный текст новости. " * 60
+    llm.push_json({"text": original, "references_post_ids": []})
+    llm.push_json({"text": "мусор", "references_post_ids": []})
+    generator = PostGenerator(make_cfg(), llm, style_file)
+
+    draft = await generator.generate(make_news(), related=[])
+
+    assert 0 < len(draft.text) <= MAX_POST_LENGTH
+    assert "мусор" not in draft.text
+    assert draft.text.startswith("Осмысленный текст новости.")
 
 
 async def test_generate_without_style_file(tmp_path) -> None:

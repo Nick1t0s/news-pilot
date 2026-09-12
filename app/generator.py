@@ -13,6 +13,7 @@ from app.textutil import plain_text, sanitize_telegram_html
 log = logging.getLogger("generator")
 
 MAX_POST_LENGTH = 1000
+MIN_POST_LENGTH = 200
 
 DEFAULT_STYLE = (
     "Ты — админ новостного Telegram-канала. Пишешь посты живым языком: коротко, по делу, "
@@ -85,7 +86,7 @@ class PostGenerator:
                 temperature=0.2,
             )
             text = sanitize_telegram_html(str(data.get("text") or ""))
-            if text and len(text) <= MAX_POST_LENGTH:
+            if MIN_POST_LENGTH <= len(text) <= MAX_POST_LENGTH:
                 return text
         except LLMError:
             pass
