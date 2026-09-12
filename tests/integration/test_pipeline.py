@@ -240,6 +240,7 @@ async def test_moderation_mode_draft_flow(settings, pool, monkeypatch) -> None:
     assert post.tg_message_id is None
     assert len(box.sender.drafts) == 1
     assert box.sender.published == []
+    assert "обработано за" in box.sender.drafts[0]["text"]
 
     await box.publisher.reject(post.id, "rejected by admin")
     news = await box.news(news_id)

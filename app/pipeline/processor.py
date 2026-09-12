@@ -17,6 +17,13 @@ def _short_title(news: News | None) -> str:
     return news.title[:80] if news else ""
 
 
+def _duration_note(seconds: float) -> str:
+    total = max(1, round(seconds))
+    if total >= 60:
+        return f"обработано за {total // 60} мин {total % 60} с"
+    return f"обработано за {total} с"
+
+
 class Pipeline:
     """News processing pipeline: dedup -> photo -> writing -> publish."""
 
@@ -62,7 +69,7 @@ class Pipeline:
                 log.info("processing finished: result=%s in %.1fs", verdict, time.monotonic() - started)
                 return
             photos = await self._run_photo(news_id)
-            await self._run_writing_and_publish(news_id, photos)
+            await self._run_writing_and_publish(news_id, photos, time.monotonic() - started)
             log.info("processing finished: result=draft in %.1fs", time.monotonic() - started)
         except Exception as exc:
             log.exception("pipeline stage failed")
@@ -115,7 +122,7 @@ class Pipeline:
         log.info("stage=photo found=%d in %.1fs", len(photos), time.monotonic() - stage)
         return photos
 
-    async def _run_writing_and_publish(self, news_id: int, photos: list) -> None:
+    async def _run_writing_and_publish(self, news_id: int, photos: list, elapsed: float) -> None:
         stage = time.monotonic()
         await repo.set_news_status(self._pool, news_id, NewsStatus.writing, stage="writing", message="stage started")
         news = await repo.get_news(self._pool, news_id)
@@ -123,7 +130,7 @@ class Pipeline:
             raise LookupError(f"news {news_id} not found")
         related = await self._context.find(news)
         draft = await self._generator.generate(news, related)
-        await self._publisher.submit(news, draft, photos)
+        await self._publisher.submit(news, draft, photos, note=_duration_note(elapsed))
         log.info("stage=writing done in %.1fs", time.monotonic() - stage)
 
     async def _fail(self, news_id: int, message: str) -> None:

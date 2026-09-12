@@ -51,7 +51,7 @@ class PublishService:
         self._admin_msgs: dict[int, tuple[int | None, int]] = {}
         self._post_retries: dict[int, int] = {}
 
-    async def submit(self, news: News, draft, photos: list) -> None:
+    async def submit(self, news: News, draft, photos: list, note: str | None = None) -> None:
         post_id = await repo.insert_post(self._pool, news.id, draft.text, self._initial_status())
         await repo.add_post_images(
             self._pool, post_id,
@@ -62,16 +62,16 @@ class PublishService:
             self._pool, news.id, "publish", "info",
             f"post draft created id={post_id}, mode={self._cfg.publish.mode}",
         )
-        await self._dispatch(post_id, news)
+        await self._dispatch(post_id, news, note)
 
     def _initial_status(self) -> PostStatus:
         if self._cfg.publish.mode == "moderation":
             return PostStatus.draft
         return PostStatus.queued
 
-    async def _dispatch(self, post_id: int, news: News) -> None:
+    async def _dispatch(self, post_id: int, news: News, note: str | None) -> None:
         if self._cfg.publish.mode == "moderation":
-            await self.send_draft(post_id)
+            await self.send_draft(post_id, note=note)
             message = "draft sent to admin for moderation"
         else:
             self.queue.put_nowait(post_id)
@@ -208,17 +208,18 @@ class PublishService:
         if self._publish_times:
             log.info("rate limit window restored: %d posts in the last hour", len(self._publish_times))
 
-    async def send_draft(self, post_id: int) -> None:
+    async def send_draft(self, post_id: int, note: str | None = None) -> None:
         post = await repo.get_post(self._pool, post_id)
         if post is None:
             return
         images = await repo.get_post_images(self._pool, post_id)
         local_paths = [image.local_path for image in images if image.local_path]
 
+        text = post.text if note is None else f"{post.text}\n\n<i>{note}</i>"
         keyboard = moderation_keyboard(post_id, has_photos=bool(local_paths))
-        message = await self._sender.send_moderation_draft(post.text, local_paths, keyboard)
+        message = await self._sender.send_moderation_draft(text, local_paths, keyboard)
         self._admin_msgs[post_id] = (message.chat.id, message.message_id)
-        log.info("draft sent to admin: post_id=%d photos=%d text_len=%d", post_id, len(local_paths), len(post.text))
+        log.info("draft sent to admin: post_id=%d photos=%d text_len=%d", post_id, len(local_paths), len(text))
 
     async def edit_draft_admin_message(self, post_id: int, new_text: str) -> None:
         ref = self._admin_msgs.get(post_id)
