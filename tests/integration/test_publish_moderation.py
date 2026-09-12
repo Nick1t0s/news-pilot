@@ -89,3 +89,28 @@ async def test_reply_skipped_when_reference_unpublished(settings, pool) -> None:
     await service.approve(post2)
 
     assert sender.published[-1]["reply_to"] is None
+
+
+async def test_auto_mode_notifies_admin_with_source(settings, pool) -> None:
+    settings.publish.mode = "auto"
+    settings.publish.notify_admin = True
+    service, sender = make_service(settings, pool)
+    post_id = await _make_post(pool, external_id="notify-1", photo=None)
+
+    await service.approve(post_id)
+
+    assert len(sender.admin_texts) == 1
+    text = sender.admin_texts[0]
+    assert "https://t.me/testchannel/" in text
+    assert '<a href="https://example.com/x">lenta</a>' in text
+
+
+async def test_moderation_mode_does_not_notify_admin(settings, pool) -> None:
+    settings.publish.mode = "moderation"
+    settings.publish.notify_admin = True
+    service, sender = make_service(settings, pool)
+    post_id = await _make_post(pool, external_id="notify-2", photo=None)
+
+    await service.approve(post_id)
+
+    assert sender.admin_texts == []

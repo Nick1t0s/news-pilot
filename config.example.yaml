@@ -68,3 +68,4 @@ context:
 publish:
   mode: moderation        # auto | moderation
   moderation_timeout_hours: 24
+  notify_admin: false     # в режиме auto — уведомлять админа о каждой публикации (ссылка, время, источник)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import html
 import logging
 
 import asyncpg
@@ -79,9 +80,27 @@ class PublishService:
             self._pool, post.news_id, NewsStatus.published,
             stage="publish", message=f"published{note} {tg_url or message_id}",
         )
+        if self._cfg.publish.mode == "auto" and self._cfg.publish.notify_admin:
+            await self._notify_admin_published(post_id, tg_url or message_id)
         self._post_retries.pop(post_id, None)
         log.info("published: post_id=%d message_id=%d photos=%d", post_id, message_id, photos_count)
         return await repo.get_post(self._pool, post_id)
+
+    async def _notify_admin_published(self, post_id: int, link: int | str) -> None:
+        try:
+            post = await repo.get_post(self._pool, post_id)
+            news = await repo.get_news(self._pool, post.news_id) if post else None
+            if news is None:
+                return
+            now = dt.datetime.now(dt.timezone.utc)
+            stamp = news.published_at or news.created_at
+            age = f"\n⏱ {_humanize_age(now - stamp)} назад" if stamp else ""
+            source = f'<a href="{html.escape(news.url, quote=True)}">{html.escape(news.source)}</a>' if news.url else news.source
+            await self._sender.send_admin_text(
+                f"✅ Опубликовано: {link}\n📰 Источник: {source}{age}"
+            )
+        except Exception:
+            log.exception("failed to notify admin about published post: post_id=%s", post_id)
 
     async def _resolve_reply_target(self, post_id: int) -> int | None:
         referenced_ids = await repo.get_post_references(self._pool, post_id)
@@ -215,6 +234,28 @@ class PublishService:
         except Exception as exc:  # noqa: BLE001
             log.warning("post embedding failed: %s", exc)
             return None
+
+
+def _plural(value: int, one: str, few: str, many: str) -> str:
+    if value % 10 == 1 and value % 100 != 11:
+        return one
+    if value % 10 in {2, 3, 4} and value % 100 not in {12, 13, 14}:
+        return few
+    return many
+
+
+def _humanize_age(delta: dt.timedelta) -> str:
+    seconds = max(0, int(delta.total_seconds()))
+    if seconds < 60:
+        return "меньше минуты"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} {_plural(minutes, 'минуту', 'минуты', 'минут')}"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} {_plural(hours, 'час', 'часа', 'часов')}"
+    days = hours // 24
+    return f"{days} {_plural(days, 'день', 'дня', 'дней')}"
 
 
 def _seconds_until_quiet_end(now: dt.datetime, window: tuple[dt.time, dt.time], tz) -> float:

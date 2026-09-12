@@ -97,6 +97,7 @@ class ContextConfig(ExtraForbid):
 class PublishConfig(ExtraForbid):
     mode: Literal["auto", "moderation"] = "moderation"
     moderation_timeout_hours: float = 24.0
+    notify_admin: bool = False
 
 
 class Settings(BaseSettings):
