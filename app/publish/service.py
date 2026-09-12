@@ -102,9 +102,9 @@ class PublishService:
         post = await repo.get_post(self._pool, post_id)
         if post is None:
             return
-        await repo.set_post_status(self._pool, post_id, PostStatus.rejected)
+        await repo.delete_post(self._pool, post_id)
         await repo.set_news_status(
-            self._pool, post.news_id, NewsStatus.failed,
+            self._pool, post.news_id, NewsStatus.rejected,
             stage="publish", message=f"rejected: {reason}", level="warn",
         )
         self._admin_msgs.pop(post_id, None)
@@ -171,7 +171,7 @@ class PublishService:
                 expired = await repo.expire_old_drafts(self._pool, cutoff)
                 for post_id, news_id in expired:
                     await repo.set_news_status(
-                        self._pool, news_id, NewsStatus.failed,
+                        self._pool, news_id, NewsStatus.rejected,
                         stage="publish", message="moderation timeout", level="warn",
                     )
                     self._admin_msgs.pop(post_id, None)
@@ -186,6 +186,7 @@ class PublishService:
             await asyncio.sleep(60.0)
 
     async def restore(self) -> None:
+        await self._restore_rate_limit()
         posts = await repo.posts_by_status(self._pool, [PostStatus.queued, PostStatus.draft])
         queued = [post for post in posts if post.status == PostStatus.queued]
         drafts = [post for post in posts if post.status == PostStatus.draft]
@@ -198,6 +199,14 @@ class PublishService:
                 log.exception("failed to re-send draft after restart: post_id=%s", post.id)
         if queued or drafts:
             log.info("restored after restart: queued=%d drafts=%d", len(queued), len(drafts))
+
+    async def _restore_rate_limit(self) -> None:
+        since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)
+        self._publish_times = deque(
+            sorted(await repo.recent_publish_times(self._pool, since))
+        )
+        if self._publish_times:
+            log.info("rate limit window restored: %d posts in the last hour", len(self._publish_times))
 
     async def send_draft(self, post_id: int) -> None:
         post = await repo.get_post(self._pool, post_id)

@@ -29,11 +29,6 @@ async def build_stats_text(pool: asyncpg.Pool, cfg: Settings, queued_count: int)
             "7д": await _news_status_count(conn, NewsStatus.duplicate, week_ago),
             "всего": await _news_status_count(conn, NewsStatus.duplicate, None),
         }
-        rejected = {
-            "24ч": await _post_status_count(conn, PostStatus.rejected, day_ago),
-            "7д": await _post_status_count(conn, PostStatus.rejected, week_ago),
-            "всего": await _post_status_count(conn, PostStatus.rejected, None),
-        }
         failed = {
             "24ч": await _news_status_count(conn, NewsStatus.failed, day_ago),
             "7д": await _news_status_count(conn, NewsStatus.failed, week_ago),
@@ -46,8 +41,12 @@ async def build_stats_text(pool: asyncpg.Pool, cfg: Settings, queued_count: int)
         }
         processing = await conn.fetchval(
             "SELECT COUNT(*) FROM news WHERE status = ANY($1)",
-            [NewsStatus.pending.value, NewsStatus.dedup.value,
-             NewsStatus.photo_search.value, NewsStatus.writing.value],
+            [
+                NewsStatus.pending.value,
+                NewsStatus.dedup.value,
+                NewsStatus.photo_search.value,
+                NewsStatus.writing.value,
+            ],
         )
         drafts = await conn.fetchval(
             "SELECT COUNT(*) FROM posts WHERE status = $1", PostStatus.draft.value
@@ -71,7 +70,6 @@ async def build_stats_text(pool: asyncpg.Pool, cfg: Settings, queued_count: int)
     lines.append(_row("📥 Получено новостей", received))
     lines.append(_row("✅ Опубликовано", published))
     lines.append(_row("🧹 Дубликатов", duplicates))
-    lines.append(_row("🚫 Отклонено на модерации", rejected))
     lines.append(_row("💀 Ошибок (failed)", failed))
     lines.append(_row("⚠️ Требуют проверки", needs_review))
     lines.append("")
@@ -83,7 +81,9 @@ async def build_stats_text(pool: asyncpg.Pool, cfg: Settings, queued_count: int)
         url = last_post["tg_url"] or f"message {last_post['tg_message_id']}"
         created_at = last_post["created_at"]
         lines.append("")
-        lines.append(f"Последний пост: {html.escape(str(url))} ({created_at:%d.%m %H:%M})")
+        lines.append(
+            f"Последний пост: {html.escape(str(url))} ({created_at:%d.%m %H:%M})"
+        )
     if sources:
         lines.append("")
         lines.append("<b>По источникам (24ч):</b>")
@@ -101,7 +101,9 @@ async def _news_count(conn: asyncpg.Connection, cutoff: dt.datetime | None) -> i
     return int(await conn.fetchval(query, *args))
 
 
-async def _news_status_count(conn: asyncpg.Connection, status: NewsStatus, cutoff: dt.datetime | None) -> int:
+async def _news_status_count(
+    conn: asyncpg.Connection, status: NewsStatus, cutoff: dt.datetime | None
+) -> int:
     query = "SELECT COUNT(*) FROM news WHERE status = $1"
     args: list = [status.value]
     if cutoff is not None:
@@ -110,7 +112,9 @@ async def _news_status_count(conn: asyncpg.Connection, status: NewsStatus, cutof
     return int(await conn.fetchval(query, *args))
 
 
-async def _post_status_count(conn: asyncpg.Connection, status: PostStatus, cutoff: dt.datetime | None) -> int:
+async def _post_status_count(
+    conn: asyncpg.Connection, status: PostStatus, cutoff: dt.datetime | None
+) -> int:
     query = "SELECT COUNT(*) FROM posts WHERE status = $1"
     args: list = [status.value]
     if cutoff is not None:

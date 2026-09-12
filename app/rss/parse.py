@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import html
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import feedparser
@@ -24,7 +24,6 @@ class NewsItem:
     summary: str
     link: str
     published_at: dt.datetime | None = None
-    image_urls: list[str] = field(default_factory=list)
 
 
 def normalize_url(url: str) -> str:
@@ -63,7 +62,6 @@ def parse_feed(data: bytes | str, source: str) -> list[NewsItem]:
                 summary=summary,
                 link=link,
                 published_at=_parse_time(entry.get("published_parsed") or entry.get("updated_parsed")),
-                image_urls=_collect_images(entry),
             )
         )
     return items
@@ -76,24 +74,3 @@ def _parse_time(struct) -> dt.datetime | None:
         return dt.datetime(*struct[:6], tzinfo=dt.timezone.utc)
     except (TypeError, ValueError):
         return None
-
-
-def _collect_images(entry) -> list[str]:
-    urls: list[str] = []
-    for enclosure in entry.get("enclosures") or []:
-        if isinstance(enclosure, dict):
-            href = enclosure.get("href") or enclosure.get("url")
-        else:
-            href = getattr(enclosure, "href", None)
-        if href:
-            urls.append(str(href))
-    for key in ("media_content", "media_thumbnail"):
-        for media in entry.get(key) or []:
-            url = media.get("url") if isinstance(media, dict) else None
-            if url:
-                urls.append(str(url))
-    unique: list[str] = []
-    for url in urls:
-        if url.startswith(("http://", "https://")) and url not in unique:
-            unique.append(url)
-    return unique

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from app.config import Settings
 from app.db.entities import Post
 from app.providers.llm import LLMError, LLMProvider
-from app.textutil import plain_text, sanitize_telegram_html
+from app.textutil import sanitize_telegram_html, truncate_html
 
 log = logging.getLogger("generator")
 
@@ -90,7 +90,7 @@ class PostGenerator:
                 return text
         except LLMError:
             pass
-        return plain_text(original_text)[:MAX_POST_LENGTH]
+        return truncate_html(original_text, MAX_POST_LENGTH)
 
     def _load_style(self) -> str:
         try:

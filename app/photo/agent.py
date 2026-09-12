@@ -29,12 +29,11 @@ SYSTEM_PROMPT = (
     "- Запрещено: NSFW, кадры с жестокостью, крупные логотипы СМИ, водяные знаки, постеры с текстовым спамом.\n"
     "- Горизонтальные кадры предпочтительны вертикальных.\n"
     "Порядок работы:\n"
-    "1. Если даны начальные кандидаты — сначала оцени их через inspect_image.\n"
-    "2. Если кандидатов нет или они не подходят — ищи новые через tavily_image_search (не более разрешённого числа поисков).\n"
-    "3. Начинай с точных запросов; если точных кадров нет — постепенно обобщай запрос (тема, объект, место), а не отказывайся сразу.\n"
-    "4. Каждого кандидата перед выбором оценивай через inspect_image.\n"
-    "5. Заверши работу вызовом select_images со списком id выбранных кандидатов (1–4).\n"
-    "6. Пустой список в select_images — крайний случай: только если даже тематические фото не подходят."
+    "1. Ищи кадры через tavily_image_search (не более разрешённого числа поисков).\n"
+    "2. Начинай с точных запросов; если точных кадров нет — постепенно обобщай запрос (тема, объект, место), а не отказывайся сразу.\n"
+    "3. Каждого кандидата перед выбором оценивай через inspect_image.\n"
+    "4. Заверши работу вызовом select_images со списком id выбранных кандидатов (1–4).\n"
+    "5. Пустой список в select_images — крайний случай: только если даже тематические фото не подходят."
 )
 
 TOOLS: list[dict] = [
@@ -131,12 +130,9 @@ class PhotoAgent:
             candidates[cid] = {"url": url, "bytes": None}
             return cid
 
-        initial_urls = list(news.rss_image_urls or [])
-        initial_ids = [register(url) for url in initial_urls]
-
         messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _news_prompt(news, initial_ids, max_searches)},
+            {"role": "user", "content": _news_prompt(news, max_searches)},
         ]
 
         searches_used = 0
@@ -270,19 +266,12 @@ class PhotoAgent:
         return data
 
 
-def _news_prompt(news: News, initial_ids: list[str], max_searches: int) -> str:
-    parts = [
+def _news_prompt(news: News, max_searches: int) -> str:
+    return "\n".join([
         "Суть новости:",
         news.title,
         news.text[:1200],
         "",
         f"Тебе доступно не более {max_searches} поисковых запросов.",
-    ]
-    if initial_ids:
-        parts.append(
-            "Начальные кандидаты из ленты (оцени их через inspect_image, прежде чем искать другие): "
-            + ", ".join(initial_ids)
-        )
-    else:
-        parts.append("Начальных кандидатов нет — найди фото через tavily_image_search.")
-    return "\n".join(parts)
+        "Найди фото через tavily_image_search.",
+    ])

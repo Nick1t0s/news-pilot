@@ -15,8 +15,8 @@ llm:
 
 embeddings:
   base_url: "http://localhost:11434"   # Ollama
-  model: "nomic-embed-text"
-  dimensions: 768
+  model: "qwen3-embedding:0.6b-q4_K_M"
+  dimensions: 1024
   max_chars: 6000
 
 rss:
@@ -34,8 +34,8 @@ fetcher:
   retries: 2
   min_text_length: 100
 
-database:
-  dsn: "postgresql+asyncpg://news:news@localhost:5432/news"
+# database:
+#   dsn: задаётся в .env (DATABASE__DSN) — пользователь, пароль и база настраиваются там
 
 tavily:
   # api_key: set in .env (TAVILY__API_KEY)
@@ -61,7 +61,7 @@ photo_agent:
 context:
   window_days: 14
   top_k: 3
-  min_similarity: 0.7
+  min_similarity: 0.5
 
 publish:
   mode: moderation        # auto | moderation

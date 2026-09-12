@@ -14,6 +14,7 @@ class NewsStatus(str, enum.Enum):
     published = "published"
     duplicate = "duplicate"
     needs_review = "needs_review"
+    rejected = "rejected"
     failed = "failed"
 
 
@@ -21,7 +22,6 @@ class PostStatus(str, enum.Enum):
     draft = "draft"
     queued = "queued"
     published = "published"
-    rejected = "rejected"
     failed = "failed"
 
 
@@ -34,7 +34,6 @@ class News:
     text: str
     url: str
     full_text_fetched: bool = False
-    rss_image_urls: list[str] | None = None
     published_at: dt.datetime | None = None
     embedding: list[float] | None = None
     status: NewsStatus = NewsStatus.pending
@@ -51,6 +50,7 @@ class Post:
     tg_message_id: int | None = None
     tg_url: str | None = None
     status: PostStatus = PostStatus.draft
+    published_at: dt.datetime | None = None
     created_at: dt.datetime | None = None
 
 

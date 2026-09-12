@@ -11,7 +11,6 @@ def make_news(news_id: int = 1):
         id=news_id,
         title="БПЛА атаковали автомобиль",
         text="В Шебекино беспилотник ударил по автомобилю, пострадал мужчина.",
-        rss_image_urls=None,
     )
 
 
@@ -111,3 +110,26 @@ async def test_search_limit_is_respected() -> None:
 
     assert result == []
     assert len(tavily.queries) == 2
+
+
+async def test_rss_images_are_not_passed_to_agent() -> None:
+    """Regression: agent must always search via tavily, never receive article images."""
+    news = SimpleNamespace(
+        id=1,
+        title="БПЛА атаковали автомобиль",
+        text="В Шебекино беспилотник ударил по автомобилю, пострадал мужчина.",
+        rss_image_urls=["https://example.com/from-article.jpg"],
+    )
+    llm = FakeLLM()
+    llm.push_chat(completion(None, [tool_call("t1", "select_images", {"ids": []})]))
+    tavily = make_tavily(results=[])
+    agent = make_agent(llm, tavily)
+
+    result = await agent._collect_inner(news)
+
+    assert result == []
+    first_user = llm.chat_calls[0][1]["content"]
+    assert "from-article.jpg" not in first_user
+    assert "Начальных кандидатов" not in first_user
+    assert "tavily_image_search" in first_user
+    assert tavily.queries == []

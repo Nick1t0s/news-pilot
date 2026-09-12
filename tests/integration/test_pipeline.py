@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import os
 
 from app.bot.stats import build_stats_text
 from app.config import (
@@ -31,7 +32,7 @@ from app.rss.parse import NewsItem
 from app.rss.poller import FeedPoller
 from tests.mocks import FakeEmbeddings, FakeLLM, FakeSender
 
-TEST_DSN = "postgresql+asyncpg://news:news@localhost:55432/news"
+TEST_DSN = os.environ.get("TEST_DSN", "postgresql+asyncpg://USER:PASSWORD@localhost:5432/DBNAME")
 
 METRO_TEXT = (
     "В Москве открыли новую линию метро длиной 18 км с шестью станциями. "
@@ -120,7 +121,7 @@ class Bundle:
 
     async def all_posts(self) -> list[Post]:
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT id, news_id, text, embedding, tg_message_id, tg_url, status, created_at FROM posts ORDER BY id")
+            rows = await conn.fetch("SELECT id, news_id, text, embedding, tg_message_id, tg_url, status, published_at, created_at FROM posts ORDER BY id")
         from app.db.repo import _post
 
         return [_post(row) for row in rows]
@@ -246,9 +247,8 @@ async def test_moderation_mode_draft_flow(settings, pool, monkeypatch) -> None:
 
     await box.publisher.reject(post.id, "rejected by admin")
     news = await box.news(news_id)
-    assert news.status == NewsStatus.failed
-    post = (await box.all_posts())[0]
-    assert post.status == PostStatus.rejected
+    assert news.status == NewsStatus.rejected
+    assert (await box.all_posts()) == []
 
 
 async def test_photo_failure_does_not_block(settings, pool, monkeypatch) -> None:

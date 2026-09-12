@@ -8,7 +8,7 @@ HTTP-сервера в приложении нет: источник — RSS, м
 
 ## Стек
 
-Python 3.12, feedparser, trafilatura, PostgreSQL 16 + pgvector, asyncpg (raw SQL),
+Python 3.12, feedparser, trafilatura, PostgreSQL 16+ с pgvector (на хост-машине), asyncpg (raw SQL),
 OpenAI-compatible LLM (openai SDK), Ollama (эмбеддинги), tavily-python, aiogram 3, pydantic-settings.
 
 ## Запуск
@@ -21,12 +21,18 @@ python3.12 -m venv .venv
 cp .env.example .env               # заполнить секреты
 cp config.example.yaml config.yaml # настроить фиды/канал/режим
 
-# БД (PostgreSQL 16 + pgvector)
-docker run -d --name news-pilot-pg -e POSTGRES_USER=news -e POSTGRES_PASSWORD=news \
-  -e POSTGRES_DB=news -p 5432:5432 pgvector/pgvector:pg16
+# БД — PostgreSQL на машине (16+, с расширением pgvector).
+# Пользователь, пароль и база — любые; всё задаётся в .env (DATABASE__DSN).
+sudo apt install postgresql postgresql-18-pgvector   # имя пакета pgvector зависит от версии PG
+sudo -u postgres psql -c "CREATE ROLE мой_юзер LOGIN PASSWORD 'мой_пароль';"
+sudo -u postgres createdb -O мой_юзер моя_база
+
+# В .env указать (юзер/пароль/база — ваши):
+# DATABASE__DSN=postgresql+asyncpg://мой_юзер:мой_пароль@localhost:5432/моя_база
+# TEST_DSN=postgresql+asyncpg://мой_юзер:мой_пароль@localhost:5432/моя_база
 
 # Ollama (эмбеддинги)
-ollama pull nomic-embed-text
+ollama pull qwen3-embedding:0.6b
 
 .venv/bin/python main.py
 ```
@@ -35,11 +41,20 @@ ollama pull nomic-embed-text
 
 ### Docker
 
+PostgreSQL в compose **нет** — требуется работающий PostgreSQL на хост-машине
+(прослушивает localhost, юзер/база — из `DATABASE__DSN`).
+
 ```bash
 cp .env.example .env && cp config.example.yaml config.yaml  # заполнить
-docker compose up -d --build          # app + postgres
+docker compose up -d --build          # app (БД — на хосте)
 docker compose --profile optional up -d ollama   # если нужен локальный Ollama
 ```
+
+В контейнере БД доступна по `host.docker.internal:5432` (в compose добавлен `host-gateway`),
+поэтому в `.env` укажите: `DATABASE__DSN=postgresql+asyncpg://юзер:пароль@host.docker.internal:5432/база`.
+PostgreSQL должен слушать TCP (в `postgresql.conf`: `listen_addresses = 'localhost'` — по умолчанию
+достаточно; для доступа из контейнера на Linux используйте `host-gateway`-адрес и правило
+в `pg_hba.conf` для сети docker-моста, например `172.16.0.0/12`).
 
 Фид эмулятора в конфиге приложения: `http://host.docker.internal:PORT/rss`
 (в compose добавлен `host-gateway`).
@@ -51,7 +66,7 @@ docker compose --profile optional up -d ollama   # если нужен лока�
 - `.env` — секреты, переопределяют YAML: `LLM__API_KEY`, `TAVILY__API_KEY`,
   `TELEGRAM__BOT_TOKEN`, `DATABASE__DSN` (вложенность — через `__`).
 - Смена `publish.mode` (`auto` | `moderation`) — только конфиг + рестарт, код менять не нужно.
-- `embeddings.dimensions` (768) зашита в схему БД; при смене — пересоздать базу (данные не критичны).
+- `embeddings.dimensions` (1024) зашита в схему БД; при смене — пересоздать базу (данные не критичны).
 
 ## Пайплайн
 
@@ -60,7 +75,7 @@ RSS feeds → Poller → догрузка полного текста (trafilatu
   → статус pending → эмбеддинг (Ollama)
   → [1] Дедупликация: pgvector top-5 за window_days с порогом min_similarity + LLM-вердикт
       → duplicate / needs_review (on_error: review|pass|drop) — конец
-  → [2] Фото-агент: enclosures → tavily_image_search / inspect_image (vision) / select_images,
+  → [2] Фото-агент: tavily_image_search / inspect_image (vision) / select_images,
       лимиты max_iterations/max_searches/max_images; 0 фото — валидный исход
   → [3] Поиск релевантных опубликованных постов (top-3, context.window_days)
   → [4] Генерация поста по prompts/style.md (structured output, ≤1000 символов, HTML)
@@ -75,11 +90,12 @@ RSS feeds → Poller → догрузка полного текста (trafilatu
 ## Статусы новости
 
 `pending → dedup → (duplicate | needs_review | photo_search) → writing → (moderation | published)`,
-`failed` — при ошибках этапа или коротком тексте.
+`rejected` — отклонение на модерации или таймаут, `failed` — при ошибках этапа или коротком тексте.
 
 Черновики постов хранятся в таблице `posts` со статусом `draft` (модерация) / `queued`
 (очередь auto) и переотправляются при рестарте; в поиске связанных постов участвуют только
-`status=published`. Отклонённые посты получают `status=rejected` (для статистики).
+`status=published`. Отклонённые посты (вручную или по таймауту) удаляются из `posts`;
+новость получает `status=rejected`.
 
 ## Эмулятор новостей (ручной e2e)
 
@@ -106,7 +122,8 @@ python emulator/main.py --scenario mixed --interval 60 --port 8080
 ## Тесты
 
 ```bash
-# нужна БД PostgreSQL + pgvector (порт 5432 или свой DSN в tests/conftest.py)
+# нужна БД PostgreSQL + pgvector на машине; DSN берётся из TEST_DSN в .env
+# (дефолт — заглушка, без TEST_DSN интеграционные тесты не подключатся)
 python -m pytest
 ```
 

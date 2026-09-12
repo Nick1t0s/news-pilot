@@ -25,7 +25,6 @@ def test_parse_full_feed() -> None:
     assert first.summary == "Краткое описание первой новости"
     assert first.link == "https://example.com/1"
     assert first.published_at is not None
-    assert first.image_urls == ["https://example.com/img1.jpg"]
 
 
 def test_parse_without_guid_uses_normalized_link() -> None:

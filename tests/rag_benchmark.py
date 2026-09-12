@@ -34,7 +34,7 @@ from app.providers.embeddings import EmbeddingError, EmbeddingProvider
 from app.providers.retry import with_retries
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-DB_DSN = "postgresql+asyncpg://rag:rag@localhost:55432/rag"
+DB_DSN = os.environ.get("TEST_DSN", "postgresql+asyncpg://USER:PASSWORD@localhost:5432/DBNAME")
 MODELS = {
     "qwen3-embedding:0.6b-q4_K_M": 1024,
     "qwen3-embedding:4b-q4_K_M": 2560,
@@ -247,7 +247,6 @@ async def run_model(model: str, dims: int, instruct: bool) -> dict:
                 text=text,
                 url="https://example.invalid/" + topic,
                 full_text_fetched=True,
-                rss_image_urls=None,
                 published_at=None,
                 status=NewsStatus.published,
             )

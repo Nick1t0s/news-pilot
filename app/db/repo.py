@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import json
 
 import asyncpg
 import numpy as np
@@ -14,8 +13,8 @@ from app.db.entities import (
     PostStatus,
 )
 
-_NEWS_COLUMNS = "id, source, external_id, title, text, url, full_text_fetched, rss_image_urls, published_at, embedding, status, duplicate_of_id, created_at"
-_POST_COLUMNS = "id, news_id, text, embedding, tg_message_id, tg_url, status, created_at"
+_NEWS_COLUMNS = "id, source, external_id, title, text, url, full_text_fetched, published_at, embedding, status, duplicate_of_id, created_at"
+_POST_COLUMNS = "id, news_id, text, embedding, tg_message_id, tg_url, status, published_at, created_at"
 
 
 def _vec(value) -> np.ndarray | None:
@@ -39,7 +38,6 @@ def _news(row) -> News:
         text=row["text"],
         url=row["url"],
         full_text_fetched=row["full_text_fetched"],
-        rss_image_urls=json.loads(row["rss_image_urls"]) if row["rss_image_urls"] else None,
         published_at=row["published_at"],
         embedding=_emb(row["embedding"]),
         status=NewsStatus(row["status"]),
@@ -57,6 +55,7 @@ def _post(row) -> Post:
         tg_message_id=row["tg_message_id"],
         tg_url=row["tg_url"],
         status=PostStatus(row["status"]),
+        published_at=row["published_at"],
         created_at=row["created_at"],
     )
 
@@ -80,7 +79,6 @@ async def add_news(
     text: str,
     url: str,
     full_text_fetched: bool,
-    rss_image_urls: list[str] | None,
     published_at: dt.datetime | None,
     status: NewsStatus,
     log_stage_name: str | None = None,
@@ -89,15 +87,14 @@ async def add_news(
     async with pool.acquire() as conn, conn.transaction():
         news_id = await conn.fetchval(
             "INSERT INTO news (source, external_id, title, text, url, full_text_fetched,"
-            " rss_image_urls, published_at, status)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+            " published_at, status)"
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
             source,
             external_id,
             title,
             text,
             url,
             full_text_fetched,
-            json.dumps(rss_image_urls) if rss_image_urls else None,
             published_at,
             status.value,
         )
@@ -246,7 +243,8 @@ async def update_post_published(
 ) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE posts SET status = $2, tg_message_id = $3, tg_url = $4, embedding = $5 WHERE id = $1",
+            "UPDATE posts SET status = $2, tg_message_id = $3, tg_url = $4, embedding = $5,"
+            " published_at = now() WHERE id = $1",
             post_id, PostStatus.published.value, tg_message_id, tg_url, _vec(embedding),
         )
 
@@ -256,13 +254,18 @@ async def set_post_status(pool: asyncpg.Pool, post_id: int, status: PostStatus) 
         await conn.execute("UPDATE posts SET status = $2 WHERE id = $1", post_id, status.value)
 
 
+async def delete_post(pool: asyncpg.Pool, post_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM posts WHERE id = $1", post_id)
+
+
 async def expire_old_drafts(pool: asyncpg.Pool, cutoff: dt.datetime) -> list[tuple[int, int]]:
-    """Mark stale moderation drafts rejected; returns (post_id, news_id) pairs."""
+    """Delete stale moderation drafts; returns (post_id, news_id) pairs."""
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "UPDATE posts SET status = $2 WHERE status = $1 AND created_at < $3"
+            "DELETE FROM posts WHERE status = $1 AND created_at < $2"
             " RETURNING id, news_id",
-            PostStatus.draft.value, PostStatus.rejected.value, cutoff,
+            PostStatus.draft.value, cutoff,
         )
     return [(int(row["id"]), int(row["news_id"])) for row in rows]
 
@@ -274,6 +277,15 @@ async def posts_by_status(pool: asyncpg.Pool, statuses: list[PostStatus]) -> lis
             [status.value for status in statuses],
         )
     return [_post(row) for row in rows]
+
+
+async def recent_publish_times(pool: asyncpg.Pool, since: dt.datetime) -> list[dt.datetime]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT published_at FROM posts WHERE status = $1 AND published_at >= $2",
+            PostStatus.published.value, since,
+        )
+    return [row["published_at"] for row in rows]
 
 
 async def nearest_published_posts(

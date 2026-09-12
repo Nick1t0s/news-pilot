@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS news (
     text TEXT NOT NULL,
     url TEXT NOT NULL,
     full_text_fetched BOOLEAN NOT NULL DEFAULT FALSE,
-    rss_image_urls JSONB,
     published_at TIMESTAMPTZ,
     embedding vector(__DIM__),
     status TEXT NOT NULL DEFAULT 'pending',
@@ -29,6 +28,7 @@ CREATE TABLE IF NOT EXISTS posts (
     tg_message_id BIGINT,
     tg_url TEXT,
     status TEXT NOT NULL DEFAULT 'draft',
+    published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

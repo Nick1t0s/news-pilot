@@ -23,9 +23,7 @@ class ContextSearch:
         self._embeddings = embeddings
 
     async def find(self, news: News) -> list[Post]:
-        embedding = news.embedding
-        if embedding is None:
-            embedding = await self._embeddings.embed(f"{news.title}\n{news.text[: self._cfg.embeddings.max_chars]}")
+        embedding = await self._embeddings.embed(f"{news.title}\n{news.text[: self._cfg.embeddings.max_chars]}")
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=self._cfg.context.window_days)
         rows = await repo.nearest_published_posts(
             self._pool,

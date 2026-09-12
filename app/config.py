@@ -29,8 +29,8 @@ class LLMConfig(ExtraForbid):
 
 class EmbeddingsConfig(ExtraForbid):
     base_url: str = "http://localhost:11434"
-    model: str = "nomic-embed-text"
-    dimensions: int = 768
+    model: str = "qwen3-embedding:0.6b-q4_K_M"
+    dimensions: int = 1024
     max_chars: int = 6000
     timeout_seconds: float = 60.0
     retries: int = 3
@@ -53,7 +53,7 @@ class FetcherConfig(ExtraForbid):
 
 
 class DatabaseConfig(ExtraForbid):
-    dsn: str = "postgresql+asyncpg://news:news@localhost:5432/news"
+    dsn: str = "postgresql+asyncpg://USER:PASSWORD@localhost:5432/DBNAME"
 
 
 class TavilyConfig(ExtraForbid):
@@ -84,7 +84,7 @@ class PhotoAgentConfig(ExtraForbid):
 class ContextConfig(ExtraForbid):
     window_days: int = 14
     top_k: int = 3
-    min_similarity: float = 0.7
+    min_similarity: float = 0.5
 
 
 class PublishConfig(ExtraForbid):

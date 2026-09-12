@@ -15,7 +15,6 @@ async def _make_post(pool, *, external_id: str, photo: str | None) -> int:
         text="Текст новости про мост",
         url="https://example.com/x",
         full_text_fetched=True,
-        rss_image_urls=None,
         published_at=None,
         status=NewsStatus.published,
     )

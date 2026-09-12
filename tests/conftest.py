@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 import pytest_asyncio
 
@@ -20,7 +22,7 @@ from app.config import (
 )
 from app.db.base import create_pool, init_schema
 
-TEST_DSN = "postgresql+asyncpg://news:news@localhost:55432/news"
+TEST_DSN = os.environ.get("TEST_DSN", "postgresql+asyncpg://USER:PASSWORD@localhost:5432/DBNAME")
 
 _TRUNCATE = "TRUNCATE processing_log, post_references, post_images, posts, news RESTART IDENTITY CASCADE"
 
@@ -76,7 +78,6 @@ def news_factory(pool):
             text=text,
             url="https://example.com/x",
             full_text_fetched=True,
-            rss_image_urls=None,
             published_at=None,
             status=NewsStatus.pending,
         )

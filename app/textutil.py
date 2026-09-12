@@ -109,6 +109,92 @@ def plain_text(raw: str) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
+def truncate_html(raw: str, limit: int) -> str:
+    """Truncate HTML text to a visible-character limit, keeping markup intact.
+
+    Counts only text outside tags, cuts on a word boundary, closes all
+    open tags so links and formatting survive the cut.
+    """
+    if not raw:
+        return ""
+    if len(plain_text(raw)) <= limit:
+        return raw
+
+    class _Truncator(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.out: list[str] = []
+            self.open_tags: list[str] = []
+            self.visible = 0
+            self.overflow = False
+
+        def handle_starttag(self, tag: str, attrs) -> None:
+            if tag in _BLOCK_TAGS:
+                self.out.append("\n")
+                return
+            if tag == "a":
+                href = dict(attrs).get("href", "")
+                if _safe_href(href):
+                    self.out.append(f'<a href="{html.escape(href, quote=True)}">')
+                    self.open_tags.append("a")
+                return
+            if tag in ALLOWED_TAGS:
+                self.out.append(f"<{tag}>")
+                self.open_tags.append(tag)
+
+        def handle_startendtag(self, tag: str, attrs) -> None:
+            if tag in _BLOCK_TAGS:
+                self.out.append("\n")
+            elif tag == "a" and _safe_href(dict(attrs).get("href", "")):
+                href = dict(attrs)["href"]
+                text = html.escape(href, quote=True)
+                self.out.append(f'<a href="{html.escape(href, quote=True)}">{text}</a>')
+            elif tag in ALLOWED_TAGS:
+                self.out.append(f"<{tag}></{tag}>")
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag in _BLOCK_TAGS:
+                self.out.append("\n")
+                return
+            if tag in ALLOWED_TAGS and tag in self.open_tags:
+                while self.open_tags:
+                    open_tag = self.open_tags.pop()
+                    self.out.append(f"</{open_tag}>")
+                    if open_tag == tag:
+                        break
+
+        def handle_data(self, data: str) -> None:
+            if self.overflow:
+                return
+            remaining = limit - self.visible
+            if len(data) <= remaining:
+                self.out.append(html.escape(data, quote=False))
+                self.visible += len(data)
+                return
+            head = data[:remaining]
+            if remaining > 0 and not data[: remaining + 1].isspace():
+                head = head.rsplit(maxsplit=1)[0] if " " in head.strip() else head
+            head = head.rstrip()
+            self.out.append(html.escape(head, quote=False))
+            self.visible += len(head)
+            self.overflow = True
+
+        def result(self) -> str:
+            while self.open_tags:
+                self.out.append(f"</{self.open_tags.pop()}>")
+            text = "".join(self.out)
+            lines = [line.rstrip() for line in text.splitlines()]
+            return "\n".join(lines).strip()
+
+    truncator = _Truncator()
+    try:
+        truncator.feed(raw)
+        truncator.close()
+    except Exception:  # noqa: BLE001
+        return html.escape(plain_text(raw)[:limit], quote=False)
+    return truncator.result()
+
+
 def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     a = a.tolist() if hasattr(a, "tolist") else list(a)
     b = b.tolist() if hasattr(b, "tolist") else list(b)
