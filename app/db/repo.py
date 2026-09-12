@@ -308,3 +308,30 @@ async def nearest_published_posts(
 async def count_post_images(pool: asyncpg.Pool) -> int:
     async with pool.acquire() as conn:
         return int(await conn.fetchval("SELECT COUNT(*) FROM post_images"))
+
+
+# --- recovery ---
+
+
+async def reset_unfinished_news(pool: asyncpg.Pool) -> list[int]:
+    """Delete unfinished posts and reset their news rows to pending for reprocessing.
+
+    Unfinished = news not in a terminal state (published/duplicate/rejected/failed)
+    and not awaiting moderation. Returns the ids of reset news rows (ascending).
+    """
+    in_flight = [
+        NewsStatus.dedup.value,
+        NewsStatus.photo_search.value,
+        NewsStatus.writing.value,
+    ]
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(
+            "DELETE FROM posts WHERE news_id IN (SELECT id FROM news WHERE status = ANY($1))",
+            in_flight,
+        )
+        rows = await conn.fetch(
+            "UPDATE news SET status = $2, duplicate_of_id = NULL"
+            " WHERE status = ANY($1) RETURNING id",
+            in_flight, NewsStatus.pending.value,
+        )
+    return [int(row["id"]) for row in rows]

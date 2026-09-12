@@ -15,6 +15,7 @@ from app.config import get_settings, project_root
 from app.context import AppContext
 from app.context_search import ContextSearch
 from app.db.base import create_pool, init_schema
+from app.db import repo
 from app.dedup import DedupService
 from app.fetcher import fetch_article  # noqa: F401  (kept for monkeypatching in tests)
 from app.generator import PostGenerator
@@ -72,6 +73,7 @@ async def run() -> None:
     dp = build_dispatcher(cfg)
     dp["ctx"] = AppContext(cfg=cfg, pool=pool, publisher=publisher, sender=sender)
 
+    await recover(pool, queue)
     await publisher.restore()
 
     stop = asyncio.Event()
@@ -101,6 +103,17 @@ async def run() -> None:
     await http.aclose()
     await pool.close()
     log.info("stopped")
+
+
+async def recover(pool, queue: asyncio.Queue[int]) -> None:
+    """After restart: drop unfinished work and requeue it for fresh processing."""
+    reset_ids = await repo.reset_unfinished_news(pool)
+    if reset_ids:
+        for news_id in reset_ids:
+            queue.put_nowait(news_id)
+        log.info("recovery: %d unfinished news reset to pending and requeued", len(reset_ids))
+    else:
+        log.info("recovery: nothing to reset")
 
 
 def main() -> None:
