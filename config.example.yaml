@@ -11,6 +11,7 @@ llm:                                  # генерация текста пост
   temperature: 0.4                           # «творческость» генерации (0 = строго, 1 = свободно)
   timeout_seconds: 120                       # таймаут одного запроса к LLM
   retries: 3                                 # ретраев при ошибке/таймауте (с backoff)
+  # proxy: "socks5://user:pass@host:1080"    # исходящий прокси для LLM-запросов (socks5:// / http://, пусто = напрямую)
   # extra_headers:                           # дополнительные HTTP-заголовки (шлюзы с сессионной авторизацией)
   #   x-opencode-session: "my-session-id"
   # api_key: задаётся в .env (LLM__API_KEY)
@@ -20,6 +21,7 @@ embeddings:                           # эмбеддинги для дедупа
   model: "qwen3-embedding:0.6b-q4_K_M"       # 0.6B Q4: 1024 dims, ~1 ГБ RAM, быстрый
   dimensions: 1024                           # размерность вектора (зашита в схему БД, менять = пересоздать базу)
   max_chars: 6000                            # сколько символов текста подавать на эмбеддинг (title + text[:max_chars])
+  # proxy: "socks5://user:pass@host:1080"    # прокси для доступа к Ollama (пусто = напрямую)
 
 rss:                                  # сбор новостей из RSS-лент
   poll_interval_seconds: 300                 # интервал опроса всех фидов (сек)
@@ -30,10 +32,11 @@ rss:                                  # сбор новостей из RSS-ле�
     - name: "ria"
       url: "https://ria.ru/export/rss2/index.xml"
 
-fetcher:                              # догрузка полного текста статьи по ссылке
+fetcher:                              # догрузка полного текста статьи по ссылке (и опрос RSS-лент)
   timeout_seconds: 30                        # таймаут загрузки страницы
   retries: 2                                 # ретраев при ошибке
   min_text_length: 100                       # текст короче (символов) → новость помечается failed
+  # proxy: "socks5://user:pass@host:1080"    # прокси для RSS и догрузки статей (пусто = напрямую)
 
 # database:
 #   dsn: задаётся в .env (DATABASE__DSN) — пользователь, пароль и база настраиваются там
@@ -47,6 +50,7 @@ telegram:                             # бот и канал
   # bot_token: задаётся в .env (TELEGRAM__BOT_TOKEN)
   channel_id: "@channel"                     # канал публикации: @username или числовой id -100... (бот должен быть админом)
   admin_id: 123456                           # Telegram user id админа: модерация, уведомления, /admin
+  # proxy: "socks5://user:pass@host:1080"    # прокси для Telegram Bot API (полезно из РФ, пусто = напрямую)
 
 dedup:                                # отсев дубликатов: векторный поиск + LLM-вердикт
   window_days: 3                             # искать дубли среди новостей за последние N дней
@@ -58,6 +62,7 @@ photo_agent:                          # подбор фото (tavily-поиск
   max_iterations: 10                         # максимум шагов tool-calling-цикла
   max_searches: 5                            # максимум поисковых запросов tavily на новость
   max_images: 4                              # максимум фото в посте (1–4)
+  # proxy: "socks5://user:pass@host:1080"    # прокси для скачивания фото (пусто = напрямую)
 
 context:                              # поиск связанных прошлых постов канала («как мы писали ранее»)
   window_days: 14                            # искать посты за последние N дней
@@ -69,3 +74,4 @@ publish:                              # публикация в канал
   moderation_timeout_hours: 24               # в режиме moderation: неотвеченный черновик отклоняется через N часов
   notify_admin: false                        # в режиме auto: уведомлять админа о каждой публикации (ссылка, время, источник)
   append_source: false                       # добавлять в конец поста ссылку «Источник» на исходную новость
+  # proxy: "socks5://user:pass@host:1080"    # прокси для докачки фото при повторной публикации (пусто = напрямую)

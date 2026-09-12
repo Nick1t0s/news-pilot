@@ -25,6 +25,7 @@ class LLMConfig(ExtraForbid):
     temperature: float = 0.4
     timeout_seconds: float = 120.0
     retries: int = 3
+    proxy: str = ""
     extra_headers: dict[str, str] = Field(default_factory=dict)
 
 
@@ -35,6 +36,7 @@ class EmbeddingsConfig(ExtraForbid):
     max_chars: int = 6000
     timeout_seconds: float = 60.0
     retries: int = 3
+    proxy: str = ""
 
 
 class FeedConfig(ExtraForbid):
@@ -52,6 +54,7 @@ class FetcherConfig(ExtraForbid):
     timeout_seconds: float = 30.0
     retries: int = 2
     min_text_length: int = 100
+    proxy: str = ""
 
 
 class DatabaseConfig(ExtraForbid):
@@ -68,6 +71,7 @@ class TelegramConfig(ExtraForbid):
     bot_token: str = ""
     channel_id: str = "@channel"
     admin_id: int = 0
+    proxy: str = ""
 
     @field_validator("channel_id", mode="before")
     @classmethod
@@ -87,6 +91,7 @@ class PhotoAgentConfig(ExtraForbid):
     max_iterations: int = 10
     max_searches: int = 5
     max_images: int = 4
+    proxy: str = ""
 
 
 class ContextConfig(ExtraForbid):
@@ -100,6 +105,7 @@ class PublishConfig(ExtraForbid):
     moderation_timeout_hours: float = 24.0
     notify_admin: bool = False
     append_source: bool = False
+    proxy: str = ""
 
 
 class Settings(BaseSettings):

@@ -7,6 +7,7 @@ import signal
 import httpx
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 
 from app.bot.handlers import build_dispatcher
@@ -46,9 +47,28 @@ async def run() -> None:
         follow_redirects=True,
         timeout=cfg.fetcher.timeout_seconds,
         headers={"User-Agent": "news-pilot/1.0 (+https://github.com/news-pilot)"},
+        proxy=cfg.fetcher.proxy or None,
+    )
+    http_embed = httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=cfg.embeddings.timeout_seconds,
+        headers={"User-Agent": "news-pilot/1.0 (+https://github.com/news-pilot)"},
+        proxy=cfg.embeddings.proxy or None,
+    )
+    http_photo = httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=cfg.fetcher.timeout_seconds,
+        headers={"User-Agent": "news-pilot/1.0 (+https://github.com/news-pilot)"},
+        proxy=cfg.photo_agent.proxy or None,
+    )
+    http_publish = httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=cfg.fetcher.timeout_seconds,
+        headers={"User-Agent": "news-pilot/1.0 (+https://github.com/news-pilot)"},
+        proxy=cfg.publish.proxy or None,
     )
     llm = LLMProvider(cfg.llm)
-    embeddings = EmbeddingProvider(cfg.embeddings, http)
+    embeddings = EmbeddingProvider(cfg.embeddings, http_embed)
 
     dedup = DedupService(cfg, pool, llm, embeddings)
     tavily = TavilyImageSearch(
@@ -56,13 +76,14 @@ async def run() -> None:
         timeout=cfg.tavily.timeout_seconds,
         retries=cfg.tavily.retries,
     )
-    photo_agent = PhotoAgent(cfg, llm, tavily, http)
+    photo_agent = PhotoAgent(cfg, llm, tavily, http_photo)
     context_search = ContextSearch(cfg, pool, embeddings)
     generator = PostGenerator(cfg, llm, project_root() / "prompts" / "style.md")
 
-    bot = Bot(cfg.telegram.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    session = AiohttpSession(proxy=cfg.telegram.proxy or None)
+    bot = Bot(cfg.telegram.bot_token, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     sender = TelegramSender(bot, cfg)
-    publisher = PublishService(cfg, pool, sender, embeddings, http)
+    publisher = PublishService(cfg, pool, sender, embeddings, http_publish)
 
     queue: asyncio.Queue[int] = asyncio.Queue()
     pipeline = Pipeline(cfg, pool, queue, dedup, photo_agent, context_search, generator, publisher)
@@ -99,7 +120,11 @@ async def run() -> None:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     await bot.session.close()
+    await llm.aclose()
     await http.aclose()
+    await http_embed.aclose()
+    await http_photo.aclose()
+    await http_publish.aclose()
     await pool.close()
     log.info("stopped")
 

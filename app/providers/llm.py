@@ -5,6 +5,7 @@ import json
 import logging
 import time
 
+import httpx
 from openai import (
     APIConnectionError,
     APITimeoutError,
@@ -31,13 +32,21 @@ class LLMProvider:
 
     def __init__(self, cfg: LLMConfig) -> None:
         self._cfg = cfg
+        self._http = httpx.AsyncClient(
+            proxy=cfg.proxy or None,
+            timeout=cfg.timeout_seconds,
+        )
         self._client = AsyncOpenAI(
             api_key=cfg.api_key or "missing",
             base_url=cfg.base_url,
             timeout=cfg.timeout_seconds,
             max_retries=0,
             default_headers=cfg.extra_headers or None,
+            http_client=self._http,
         )
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
 
     async def chat(
         self,
