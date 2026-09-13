@@ -113,6 +113,19 @@ class PublishConfig(ExtraForbid):
     proxy: str = ""
 
 
+class LimitsConfig(ExtraForbid):
+    daily_posts: int = 0  # 0 = no hard limit, counter not queried
+    reserve_posts: int = 5
+    timezone: str = "Europe/Moscow"
+
+    @field_validator("daily_posts", "reserve_posts")
+    @classmethod
+    def _non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("must be >= 0")
+        return value
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=os.environ.get("ENV_FILE", ".env"),
@@ -136,6 +149,7 @@ class Settings(BaseSettings):
     context: ContextConfig = Field(default_factory=ContextConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
 
     @classmethod
     def settings_customise_sources(

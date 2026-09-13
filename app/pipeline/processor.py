@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
 import time
+from zoneinfo import ZoneInfo
 
 import asyncpg
 
@@ -107,6 +109,13 @@ class Pipeline:
 
     async def _run_dedup(self, news_id: int) -> str | None:
         stage = time.monotonic()
+        if await self._daily_limit_reached():
+            await repo.set_news_status(
+                self._pool, news_id, NewsStatus.skipped,
+                stage="dedup", message="daily post limit reached",
+            )
+            log.info("stage=dedup skipped: daily post limit reached in %.1fs", time.monotonic() - stage)
+            return "skipped"
         await repo.set_news_status(self._pool, news_id, NewsStatus.dedup, stage="dedup", message="stage started")
         verdict = await self._dedup.process(news_id)
         if verdict.kind == "unique":
@@ -117,6 +126,12 @@ class Pipeline:
                 stage="dedup",
                 message=f"duplicate of {verdict.duplicate_of_id}: {verdict.reason}",
                 duplicate_of_id=verdict.duplicate_of_id,
+            )
+        elif verdict.kind == "skipped":
+            await repo.set_news_status(
+                self._pool, news_id, NewsStatus.skipped,
+                stage="dedup",
+                message=f"skipped by importance gate: {verdict.reason}",
             )
         elif verdict.kind == "needs_review":
             await repo.set_news_status(
@@ -134,6 +149,19 @@ class Pipeline:
             )
         log.info("stage=dedup verdict=%s in %.1fs", verdict.kind, time.monotonic() - stage)
         return verdict.kind
+
+    async def _daily_limit_reached(self) -> bool:
+        daily_posts = self._cfg.limits.daily_posts
+        if daily_posts <= 0:
+            return False
+        tz = ZoneInfo(self._cfg.limits.timezone)
+        now = dt.datetime.now(tz)
+        since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        published = await repo.count_published_posts_since(self._pool, since)
+        if published >= daily_posts:
+            log.info("daily limit reached: %d/%d posts published today (%s)", published, daily_posts, self._cfg.limits.timezone)
+            return True
+        return False
 
     async def _run_photo(self, news_id: int) -> list:
         stage = time.monotonic()

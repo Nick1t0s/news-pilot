@@ -18,6 +18,7 @@ class NewsStatus(str, enum.Enum):
     rejected = "rejected"
     failed = "failed"
     cleared = "cleared"
+    skipped = "skipped"
 
 
 class PostStatus(str, enum.Enum):

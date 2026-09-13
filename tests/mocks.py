@@ -35,11 +35,12 @@ class FakeEmbeddings:
 
 
 class FakeLLM:
-    def __init__(self) -> None:
+    def __init__(self, default_json: dict | None = None) -> None:
         self.json_results: list[dict] = []
         self.chat_results: list = []
         self.json_calls: list[dict] = []
         self.chat_calls: list[list] = []
+        self._default_json = default_json
 
     def push_json(self, result: dict) -> None:
         self.json_results.append(result)
@@ -57,9 +58,11 @@ class FakeLLM:
         temperature: float | None = None,
     ) -> dict:
         self.json_calls.append({"system": system, "user": user, "schema": schema, "name": schema_name})
-        if not self.json_results:
-            raise LLMError("FakeLLM: no scripted json result")
-        return self.json_results.pop(0)
+        if self.json_results:
+            return self.json_results.pop(0)
+        if self._default_json is not None:
+            return dict(self._default_json)
+        raise LLMError("FakeLLM: no scripted json result")
 
     async def chat(self, messages: list, *, tools: list | None = None, temperature: float | None = None):
         self.chat_calls.append(messages)

@@ -97,7 +97,10 @@ class Bundle:
     def __init__(self, settings, pool) -> None:
         self.settings = settings
         self.pool = pool
-        self.llm = FakeLLM()
+        self.llm = FakeLLM(default_json={
+            "is_duplicate": False, "reason": "unique", "duplicate_of_id": None,
+            "should_publish": True, "publish_reason": "important",
+        })
         self.sender = FakeSender()
         self.embeddings = FakeEmbeddings()
         self.dedup = DedupService(settings, pool, self.llm, self.embeddings)
@@ -496,3 +499,65 @@ async def test_cleared_news_has_no_posts(settings, pool, monkeypatch) -> None:
     )
     assert all(post.news_id != cleared.id for post in posts)
     assert all(post.news_id != cleared.id for post in related)
+
+
+async def test_daily_limit_skips_news_without_llm(settings, pool, monkeypatch) -> None:
+    settings.limits.daily_posts = 1
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+    box.llm.push_json({"is_duplicate": False, "reason": "уникальна", "duplicate_of_id": None, "should_publish": True, "publish_reason": "важная"})
+
+    first = NewsItem(source="lenta", external_id="guid-lim-1", title="Метро открыто", summary="s", link="https://example.com/lim-1")
+    first_id = await box.ingest(first)
+    await box.pipeline.process(first_id)
+    await box.drain()
+    assert (await box.news(first_id)).status == NewsStatus.published
+    assert len(box.llm.json_calls) == 1
+
+    second = NewsItem(source="lenta", external_id="guid-lim-2", title="Футбол", summary="s", link="https://example.com/lim-2")
+    second_id = await box.ingest(second)
+    await box.pipeline.process(second_id)
+
+    news2 = await box.news(second_id)
+    assert news2.status == NewsStatus.skipped
+    assert len(box.llm.json_calls) == 1
+    assert len(await box.all_posts()) == 1
+    log_rows = await pool.fetch(
+        "SELECT message FROM processing_log WHERE news_id = $1 AND stage = 'dedup'", second_id
+    )
+    assert any("daily post limit reached" in row["message"] for row in log_rows)
+
+
+async def test_importance_gate_skips_news(settings, pool, monkeypatch) -> None:
+    settings.limits.daily_posts = 5
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+    box.llm.push_json({"is_duplicate": False, "reason": "уникальна", "duplicate_of_id": None, "should_publish": False, "publish_reason": "рутинная новость"})
+
+    item = NewsItem(source="lenta", external_id="guid-skip-1", title="Метро открыто", summary="s", link="https://example.com/skip-1")
+    news_id = await box.ingest(item)
+    await box.pipeline.process(news_id)
+
+    news = await box.news(news_id)
+    assert news.status == NewsStatus.skipped
+    assert await box.all_posts() == []
+    assert box.generator.calls == 0
+    log_rows = await pool.fetch(
+        "SELECT message FROM processing_log WHERE news_id = $1 AND stage = 'dedup'", news_id
+    )
+    assert any("importance gate" in row["message"] for row in log_rows)
+
+
+async def test_no_limit_when_daily_posts_zero(settings, pool, monkeypatch) -> None:
+    settings.limits.daily_posts = 0
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+    box.llm.push_json({"is_duplicate": False, "reason": "уникальна", "duplicate_of_id": None, "should_publish": True, "publish_reason": "важная"})
+
+    item = NewsItem(source="lenta", external_id="guid-nolim", title="Метро открыто", summary="s", link="https://example.com/nolim")
+    news_id = await box.ingest(item)
+    await box.pipeline.process(news_id)
+    await box.drain()
+
+    assert (await box.news(news_id)).status == NewsStatus.published
+    assert len(box.sender.published) == 1

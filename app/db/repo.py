@@ -332,6 +332,14 @@ async def count_post_images(pool: asyncpg.Pool) -> int:
         return int(await conn.fetchval("SELECT COUNT(*) FROM post_images"))
 
 
+async def count_published_posts_since(pool: asyncpg.Pool, since: dt.datetime) -> int:
+    async with pool.acquire() as conn:
+        return int(await conn.fetchval(
+            "SELECT COUNT(*) FROM posts WHERE status = $1 AND published_at >= $2",
+            PostStatus.published.value, since,
+        ))
+
+
 # --- recovery ---
 
 
