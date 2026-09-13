@@ -31,6 +31,20 @@ rss:                                  # сбор новостей из RSS-ле�
       url: "https://lenta.ru/rss"
     - name: "ria"
       url: "https://ria.ru/export/rss2/index.xml"
+    - name: "tass"
+      url: "https://tass.ru/rss/v2.xml"
+    - name: "interfax"
+      url: "https://www.interfax.ru/rss.asp"
+    - name: "kommersant"
+      url: "https://www.kommersant.ru/RSS/news.xml"
+    - name: "5tv"
+      url: "https://www.5-tv.ru/news/rss/"
+    - name: "rbc"
+      url: "https://rssexport.rbc.ru/rbcnews/news/30/full.rss"
+    - name: "vedomosti"
+      url: "https://www.vedomosti.ru/rss/news"
+    - name: "rt"
+      url: "https://www.rt.com/rss/"
 
 fetcher:                              # догрузка полного текста статьи по ссылке (и опрос RSS-лент)
   timeout_seconds: 30                        # таймаут загрузки страницы
