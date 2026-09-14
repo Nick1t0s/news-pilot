@@ -37,3 +37,6 @@ def setup_logging(level: str = "INFO") -> None:
     root.setLevel(level.upper())
     for noisy in ("httpx", "httpcore", "aiosqlite", "asyncio", "aiogram.event", "aiogram.dispatcher"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # trafilatura logs "discarding data"/"cannot get HTML" for every page it fails to
+    # parse; we fall back to the RSS summary, so this noise is not actionable
+    logging.getLogger("trafilatura").setLevel(logging.CRITICAL)
