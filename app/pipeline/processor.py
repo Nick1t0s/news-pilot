@@ -11,6 +11,8 @@ import asyncpg
 from app.db import repo
 from app.db.entities import News, NewsStatus
 from app.logging import set_news_id
+from app.providers.embeddings import EmbeddingError
+from app.providers.llm import LLMError
 
 log = logging.getLogger("pipeline")
 
@@ -81,7 +83,10 @@ class Pipeline:
                 log.info("processing finished: result=draft in %.1fs", time.monotonic() - started)
                 return
             except Exception as exc:
-                log.exception("pipeline stage failed")
+                if isinstance(exc, (LLMError, EmbeddingError)):
+                    log.error("pipeline stage failed: %s", exc)
+                else:
+                    log.exception("pipeline stage failed")
                 if isinstance(exc, LookupError):
                     # news row is gone, retrying is pointless
                     await self._fail(news_id, str(exc))

@@ -16,6 +16,7 @@ from app.photo.downloader import (
     sniff_image_format,
 )
 from app.photo.tavily_client import TavilyImageSearch
+from app.providers.llm import LLMError
 
 log = logging.getLogger("photo_agent")
 
@@ -118,6 +119,9 @@ class PhotoAgent:
     async def collect(self, news: News) -> list[PhotoRecord]:
         try:
             return await self._collect_inner(news)
+        except LLMError as exc:
+            log.error("photo agent failed: news_id=%s error=%s", news.id, exc)
+            return []
         except Exception:
             log.exception("photo agent failed: news_id=%s", news.id)
             return []
