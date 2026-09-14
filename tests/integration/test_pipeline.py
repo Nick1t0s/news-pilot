@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as dt
 
 from app.bot.stats import build_stats_text
@@ -140,6 +141,48 @@ def patch_fetch(monkeypatch, text: str) -> None:
         return text
 
     monkeypatch.setattr("app.rss.poller.fetch_article", fake_fetch)
+
+
+async def test_pipeline_processes_news_concurrently(settings, pool, monkeypatch) -> None:
+    settings.pipeline.concurrency = 2
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+
+    active = 0
+    max_active = 0
+
+    class SlowGenerator(StubGenerator):
+        async def generate(self, news, related) -> PostDraft:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.05)
+            try:
+                return await super().generate(news, related)
+            finally:
+                active -= 1
+
+    box.generator = SlowGenerator()
+    box.pipeline._generator = box.generator  # pipeline keeps its own reference
+
+    runner = asyncio.create_task(box.pipeline.run())
+    try:
+        for index in range(4):
+            item = NewsItem(
+                source="lenta", external_id=f"guid-conc-{index}", title=f"Метро открыто {index}",
+                summary="s", link=f"https://example.com/conc-{index}",
+            )
+            await box.poller.ingest_item(item)
+        await asyncio.wait_for(box.queue.join(), timeout=10.0)
+    finally:
+        runner.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await runner
+
+    assert max_active <= 2, "semaphore must cap concurrency"
+    assert max_active > 1, "news must be processed in parallel"
+    posts = await box.all_posts()
+    assert len(posts) == 4
 
 
 async def test_full_pipeline_auto_publish(settings, pool, monkeypatch) -> None:

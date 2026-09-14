@@ -62,9 +62,18 @@ class FeedPoller:
         resp = await self._http.get(feed.url, timeout=self._cfg.fetcher.timeout_seconds)
         resp.raise_for_status()
         items = parse_feed(resp.content, feed.name)
+        results = await asyncio.gather(
+            *(self.ingest_item(item, clear=clear) for item in items),
+            return_exceptions=True,
+        )
         added = 0
-        for item in items:
-            if await self.ingest_item(item, clear=clear):
+        for item, result in zip(items, results):
+            if isinstance(result, BaseException):
+                log.error(
+                    "ingest failed: source=%s external_id=%s error=%s",
+                    item.source, item.external_id, result,
+                )
+            elif result:
                 added += 1
         return added
 

@@ -29,7 +29,11 @@ def _duration_note(seconds: float) -> str:
 
 
 class Pipeline:
-    """News processing pipeline: dedup -> photo -> writing -> publish."""
+    """News processing pipeline: dedup -> photo -> writing -> publish.
+
+    Each news item is processed in its own asyncio task; parallelism is capped
+    by `pipeline.concurrency` (semaphore), so a slow item never blocks others.
+    """
 
     def __init__(
         self,
@@ -50,16 +54,47 @@ class Pipeline:
         self._context = context_search
         self._generator = generator
         self._publisher = publisher
+        self._semaphore = asyncio.Semaphore(max(1, cfg.pipeline.concurrency))
+        self._tasks: set[asyncio.Task] = set()
 
     async def run(self) -> None:
-        """Sequential pipeline loop: processes one news item at a time."""
-        log.info("pipeline loop started")
-        while True:
-            news_id = await self._queue.get()
-            try:
+        """Concurrent loop: spawns a task per news item, bounded by the semaphore."""
+        log.info(
+            "pipeline loop started (concurrency=%d)",
+            max(1, self._cfg.pipeline.concurrency),
+        )
+        try:
+            while True:
+                news_id = await self._queue.get()
+                task = asyncio.create_task(
+                    self._process_guarded(news_id), name=f"pipeline-news-{news_id}"
+                )
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+        finally:
+            # run() only ends on cancellation (shutdown): stop in-flight items too
+            await self._drain_tasks()
+
+    async def _process_guarded(self, news_id: int) -> None:
+        try:
+            async with self._semaphore:
                 await self.process(news_id)
-            finally:
-                self._queue.task_done()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("pipeline task crashed: news_id=%d", news_id)
+            await self._fail(news_id, "unhandled pipeline task crash")
+        finally:
+            self._queue.task_done()
+
+    async def _drain_tasks(self) -> None:
+        if not self._tasks:
+            return
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
 
     async def process(self, news_id: int) -> None:
         set_news_id(news_id)

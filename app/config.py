@@ -27,6 +27,10 @@ class LLMConfig(ExtraForbid):
     retries: int = 3
     proxy: str = ""
     extra_headers: dict[str, str] = Field(default_factory=dict)
+    # "" = not sent; otherwise low | medium | high (OpenAI-compatible reasoning_effort)
+    reasoning_effort: str = ""
+    # Raw passthrough merged into the request body (e.g. GLM-style thinking: {"type": "disabled"})
+    extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
 class EmbeddingsConfig(ExtraForbid):
@@ -103,6 +107,14 @@ class ContextConfig(ExtraForbid):
 
 class PipelineConfig(ExtraForbid):
     retries: int = 2
+    concurrency: int = 8
+
+    @field_validator("concurrency")
+    @classmethod
+    def _positive_concurrency(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("must be >= 1")
+        return value
 
 
 class PublishConfig(ExtraForbid):
