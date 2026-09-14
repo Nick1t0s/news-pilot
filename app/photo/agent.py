@@ -143,6 +143,7 @@ class PhotoAgent:
 
         searches_used = 0
         selection: list[str] | None = None
+        failed_urls: set[str] = set()
         iterations = self._cfg.photo_agent.max_iterations
 
         for _ in range(iterations):
@@ -168,7 +169,9 @@ class PhotoAgent:
                         arguments, searches_used, max_searches, register
                     )
                 elif name == "inspect_image":
-                    reply, image_message = await self._handle_inspect(arguments, candidates)
+                    reply, image_message = await self._handle_inspect(
+                        arguments, candidates, failed_urls
+                    )
                 elif name == "select_images":
                     selection, reply = self._handle_select(arguments, candidates, max_images)
                     image_message = None
@@ -193,6 +196,9 @@ class PhotoAgent:
                 continue
             url = candidate["url"]
             data = candidate["bytes"]
+            if url in failed_urls:
+                log.info("selected photo previously failed download, dropped: url=%s", url[:200])
+                continue
             if data is None:
                 data = await download_image(self._http, url, timeout=20.0, retries=2)
             if data is not None:
@@ -217,18 +223,27 @@ class PhotoAgent:
             lines.append(f"{cid}: {url}")
         return "Найденные кандидаты (id: URL):\n" + "\n".join(lines), searches_used
 
-    async def _handle_inspect(self, arguments: dict, candidates: dict) -> tuple[str, dict | None]:
+    async def _handle_inspect(self, arguments: dict, candidates: dict, failed_urls: set[str]) -> tuple[str, dict | None]:
         ref = str(arguments.get("image") or "").strip()
         candidate = candidates.get(ref)
         url = ref if candidate is None else candidate["url"]
         if candidate is None and not ref.startswith(("http://", "https://")):
             return f"Кандидат {ref!r} не найден.", None
+        if url in failed_urls:
+            return (
+                f"Изображение {ref} уже пробовали загрузить и получили отказ сервера. "
+                "Не выбирай и не оценивай его повторно, возьми другого кандидата."
+            ), None
         data = await self._fetch_image_bytes(url)
         if data is None:
-            return f"Не удалось загрузить изображение {ref}.", None
+            failed_urls.add(url)
+            if candidate is not None:
+                candidate["bytes"] = None
+            return f"Не удалось загрузить изображение {ref}. Выбери другого кандидата.", None
         fmt = sniff_image_format(data)
         if fmt is None:
-            return f"Изображение {ref} не распознано как jpg/png/webp.", None
+            failed_urls.add(url)
+            return f"Изображение {ref} не распознано как jpg/png/webp. Выбери другого кандидата.", None
         if candidate is None:
             candidates[ref] = {"url": url, "bytes": data}
         else:

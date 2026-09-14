@@ -11,6 +11,10 @@ log = logging.getLogger("images")
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
+class PermanentImageError(RuntimeError):
+    """Unrecoverable fetch failure (e.g. HTTP 4xx); never retried."""
+
+
 def sniff_image_format(data: bytes) -> str | None:
     if len(data) < 12:
         return None
@@ -34,10 +38,15 @@ async def download_image(
     timeout: float = 20.0,
     retries: int = 2,
 ) -> bytes | None:
-    """Download and validate an image; returns raw bytes or None."""
+    """Download and validate an image; returns raw bytes or None.
+
+    HTTP 4xx failures (forbidden, not found...) are not retried.
+    """
 
     async def fetch() -> bytes:
         resp = await http.get(url, timeout=timeout, follow_redirects=True)
+        if 400 <= resp.status_code < 500:
+            raise PermanentImageError(f"HTTP {resp.status_code}")
         resp.raise_for_status()
         data = resp.content
         if len(data) > MAX_IMAGE_BYTES:
@@ -51,6 +60,9 @@ async def download_image(
             what=f"image {url[:80]}",
             exceptions=(httpx.HTTPError, httpx.StreamError, TimeoutError, ValueError),
         )
+    except PermanentImageError as exc:
+        log.warning("image not available (no retry): url=%s: %s", url[:200], exc)
+        return None
     except Exception as exc:  # noqa: BLE001
         log.warning("image download failed url=%s: %s", url[:200], exc)
         return None

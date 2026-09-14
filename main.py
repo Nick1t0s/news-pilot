@@ -39,12 +39,13 @@ BROWSER_HEADERS = {
 }
 
 
-def _make_http(cfg, proxy: str, timeout: float) -> httpx.AsyncClient:
+def _make_http(cfg, proxy: str, timeout: float, *, verify: bool = True) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         follow_redirects=True,
         timeout=timeout,
         headers=BROWSER_HEADERS,
         proxy=proxy or None,
+        verify=verify,
     )
 
 
@@ -56,13 +57,15 @@ async def run() -> None:
         log.error("telegram.bot_token is missing (set TELEGRAM__BOT_TOKEN in .env)")
         raise SystemExit(2)
 
-    pool = await create_pool(cfg.database.dsn, min_size=1, max_size=8)
+    concurrency = max(1, cfg.pipeline.concurrency)
+    pool = await create_pool(cfg.database.dsn, min_size=1, max_size=max(8, concurrency + 8))
     await init_schema(pool, cfg.embeddings.dimensions)
 
+    # many image CDNs serve broken/expired certificates; for images we skip TLS verification
     http = _make_http(cfg, cfg.fetcher.proxy, cfg.fetcher.timeout_seconds)
     http_embed = _make_http(cfg, cfg.embeddings.proxy, cfg.embeddings.timeout_seconds)
-    http_photo = _make_http(cfg, cfg.photo_agent.proxy, cfg.fetcher.timeout_seconds)
-    http_publish = _make_http(cfg, cfg.publish.proxy, cfg.fetcher.timeout_seconds)
+    http_photo = _make_http(cfg, cfg.photo_agent.proxy, cfg.fetcher.timeout_seconds, verify=False)
+    http_publish = _make_http(cfg, cfg.publish.proxy, cfg.fetcher.timeout_seconds, verify=False)
     llm = LLMProvider(cfg.llm)
     embeddings = EmbeddingProvider(cfg.embeddings, http_embed)
 
