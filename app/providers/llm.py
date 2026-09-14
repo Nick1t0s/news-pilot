@@ -64,6 +64,8 @@ class LLMProvider:
                 tools=tools,
                 tool_choice="auto" if tools else None,
                 temperature=self._cfg.temperature if temperature is None else temperature,
+                reasoning_effort=self._cfg.reasoning_effort or None,
+                extra_body=self._cfg.extra_body or None,
             )
 
         try:
@@ -96,12 +98,16 @@ class LLMProvider:
             {"role": "user", "content": user},
         ]
 
-        use_schema = True
+        # Modes tried in order: json_schema -> json_object (schema in prompt) ->
+        # plain prompt; a failure moves to the next mode, a transient error retries in place.
+        modes = ["json_schema", "json_object", "json_object"]
+        mode_index = 0
         last_error: Exception | None = None
         for attempt in range(1, self._cfg.retries + 1):
+            mode = modes[min(mode_index, len(modes) - 1)]
             response_format: dict
             sys_content = system
-            if use_schema:
+            if mode == "json_schema":
                 response_format = {"type": "json_schema", "json_schema": strict_schema}
             else:
                 response_format = {"type": "json_object"}
@@ -117,21 +123,35 @@ class LLMProvider:
                     messages=messages,  # type: ignore[arg-type]
                     temperature=temp,
                     response_format=response_format,  # type: ignore[arg-type]
+                    reasoning_effort=self._cfg.reasoning_effort or None,
+                    extra_body=self._cfg.extra_body or None,
                 )
             except BadRequestError as exc:
-                if use_schema:
+                if mode == "json_schema":
                     log.warning("json_schema rejected by provider, falling back to json_object: %s", exc)
-                    use_schema = False
+                    mode_index += 1
                     continue
                 last_error = exc
             except _TRANSIENT as exc:
                 last_error = exc
             else:
-                content = completion.choices[0].message.content
+                message = completion.choices[0].message
+                content = message.content
+                raw = content or getattr(message, "reasoning_content", None) or ""
+                if content is None or not content.strip():
+                    # thinking models often put the answer into reasoning_content
+                    content = getattr(message, "reasoning_content", None) or content or ""
                 try:
                     return _parse_json(content)
                 except (TypeError, ValueError) as exc:
                     last_error = exc
+                    log.warning(
+                        "llm json parse failed (attempt %d/%d, mode=%s): %s; raw=%r",
+                        attempt, self._cfg.retries, mode, exc, _snippet(raw),
+                    )
+                    # broken output, not transient: retry in a stricter mode
+                    if mode_index < len(modes) - 1:
+                        mode_index += 1
             if attempt < self._cfg.retries:
                 await asyncio.sleep(min(10.0, 0.5 * (2 ** (attempt - 1))))
         raise LLMError(f"llm structured completion failed: {last_error}")
@@ -167,6 +187,44 @@ def _strict_object(value: dict) -> None:
     value["additionalProperties"] = False
 
 
+def _snippet(raw: object) -> str:
+    try:
+        text = str(raw or "")
+    except Exception:  # noqa: BLE001
+        return ""
+    text = text.replace("\n", "\\n")
+    return text[:200]
+
+
+def _extract_json_object(text: str) -> str:
+    """Cut the first balanced {...} block out of the text (models add prose/reasoning around JSON)."""
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("no JSON object found in llm response")
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    raise ValueError("unbalanced JSON object in llm response")
+
+
 def _parse_json(content: str | None) -> dict:
     if not content:
         raise ValueError("empty llm response")
@@ -176,7 +234,11 @@ def _parse_json(content: str | None) -> dict:
         if text.lower().startswith("json"):
             text = text[4:]
         text = text.strip()
-    data = json.loads(text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        # response contains reasoning text around the JSON object
+        data = json.loads(_extract_json_object(text))
     if not isinstance(data, dict):
         raise TypeError("expected JSON object")
     return data
