@@ -16,12 +16,3 @@ def moderation_keyboard(post_id: int, has_photos: bool = False) -> InlineKeyboar
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def admin_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
-            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:refresh")],
-        ]
-    )

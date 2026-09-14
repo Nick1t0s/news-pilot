@@ -10,7 +10,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.filters import AdminOnly
-from app.bot.keyboards import admin_menu_keyboard
 from app.bot.stats import build_stats_text
 from app.config import Settings
 from app.textutil import sanitize_telegram_html
@@ -37,18 +36,7 @@ def _admin_router(cfg: Settings) -> Router:
     @router.message(Command("admin"))
     async def admin_menu(message: Message, ctx) -> None:
         text = await build_stats_text(ctx.pool, ctx.cfg, ctx.publisher.queued_count())
-        await message.answer(text, reply_markup=admin_menu_keyboard())
-
-    @router.callback_query(F.data.in_({"admin:stats", "admin:refresh"}))
-    async def admin_refresh(callback: CallbackQuery, ctx) -> None:
-        await callback.answer()
-        if callback.message is None:
-            return
-        text = await build_stats_text(ctx.pool, ctx.cfg, ctx.publisher.queued_count())
-        try:
-            await callback.message.edit_text(text, reply_markup=admin_menu_keyboard())
-        except Exception as exc:  # noqa: BLE001
-            log.warning("stats refresh failed: %s", exc)
+        await message.answer(text)
 
     @router.callback_query(F.data.startswith("mod:approve:"))
     async def approve(callback: CallbackQuery, ctx) -> None:
