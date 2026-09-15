@@ -7,8 +7,7 @@ import asyncpg
 
 from app.config import Settings
 from app.db import repo
-from app.db.entities import News, Post
-from app.providers.embeddings import EmbeddingProvider
+from app.db.entities import FeedItem, PublishedPost
 from app.textutil import cosine_similarity
 
 log = logging.getLogger("context")
@@ -17,15 +16,18 @@ log = logging.getLogger("context")
 class ContextSearch:
     """Finds previously published channel posts relevant to a news item."""
 
-    def __init__(self, cfg: Settings, pool: asyncpg.Pool, embeddings: EmbeddingProvider) -> None:
+    def __init__(self, cfg: Settings, pool: asyncpg.Pool, embeddings) -> None:
         self._cfg = cfg
         self._pool = pool
         self._embeddings = embeddings
 
-    async def find(self, news: News) -> list[Post]:
-        embedding = await self._embeddings.embed(f"{news.title}\n{news.text[: self._cfg.embeddings.max_chars]}")
+    async def find(self, item: FeedItem, embedding: list[float] | None = None) -> list[PublishedPost]:
+        """Search published posts by embedding. The embedding may be passed in
+        (computed earlier by the dedup gate) to avoid a second embed call."""
+        if embedding is None:
+            embedding = await self._embeddings.embed(f"{item.title}\n{item.text[: self._cfg.embeddings.max_chars]}")
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=self._cfg.context.window_days)
-        rows = await repo.nearest_published_posts(
+        rows = await repo.nearest_posts(
             self._pool,
             embedding,
             cutoff=cutoff,

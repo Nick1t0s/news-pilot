@@ -14,10 +14,8 @@ from app.bot.handlers import build_dispatcher
 from app.config import get_settings, project_root
 from app.context import AppContext
 from app.context_search import ContextSearch
-from app.db import repo
 from app.db.base import create_pool, init_schema
 from app.dedup import DedupService
-from app.fetcher import fetch_article  # noqa: F401  (kept for monkeypatching in tests)
 from app.generator import PostGenerator
 from app.logging import setup_logging
 from app.photo.agent import PhotoAgent
@@ -85,15 +83,12 @@ async def run() -> None:
     sender = TelegramSender(bot, cfg)
     publisher = PublishService(cfg, pool, sender, embeddings, http_publish)
 
-    queue: asyncio.Queue[int] = asyncio.Queue()
+    queue: asyncio.Queue = asyncio.Queue()
     pipeline = Pipeline(cfg, pool, queue, dedup, photo_agent, context_search, generator, publisher)
     poller = FeedPoller(cfg, http, pool, queue)
 
     dp = build_dispatcher(cfg)
-    dp["ctx"] = AppContext(cfg=cfg, pool=pool, publisher=publisher, sender=sender)
-
-    await recover(pool, queue)
-    await publisher.restore()
+    dp["ctx"] = AppContext(cfg=cfg, pool=pool, publisher=publisher, sender=sender, pipeline=pipeline)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -127,17 +122,6 @@ async def run() -> None:
     await http_publish.aclose()
     await pool.close()
     log.info("stopped")
-
-
-async def recover(pool, queue: asyncio.Queue[int]) -> None:
-    """After restart: drop unfinished work and requeue it for fresh processing."""
-    reset_ids = await repo.reset_unfinished_news(pool)
-    if reset_ids:
-        for news_id in reset_ids:
-            queue.put_nowait(news_id)
-        log.info("recovery: %d unfinished news reset to pending and requeued", len(reset_ids))
-    else:
-        log.info("recovery: nothing to reset")
 
 
 def main() -> None:

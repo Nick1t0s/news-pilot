@@ -3,37 +3,47 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import asyncpg
 import httpx
 
 from app.config import Settings
 from app.db import repo
-from app.db.entities import NewsStatus
+from app.db.entities import FeedItem
 from app.fetcher import fetch_article
-from app.rss.parse import parse_feed
+from app.rss.parse import NewsItem, parse_feed
 
 log = logging.getLogger("poller")
 
+_SEEN_SET_MAX = 50_000
+
 
 class FeedPoller:
+    """Polls RSS feeds and puts fetched FeedItems into the processing queue.
+
+    De-duplication of already-seen feed entries is an in-memory set of
+    (source, external_id); it dies with the process. On restart clear_run
+    re-marks everything currently in the feeds, and the vector dedup
+    absorbs whatever slips through.
+    """
+
     def __init__(
         self,
         cfg: Settings,
         http: httpx.AsyncClient,
-        pool: asyncpg.Pool,
-        queue: asyncio.Queue[int],
+        counters_pool,
+        queue: asyncio.Queue[FeedItem],
     ) -> None:
         self._cfg = cfg
         self._http = http
-        self._pool = pool
+        self._pool = counters_pool
         self._queue = queue
+        self._seen: set[tuple[str, str]] = set()
 
     async def run_forever(self) -> None:
         try:
             if self._cfg.rss.clear_run:
                 cleared = await self.poll_once(clear=True)
                 if cleared:
-                    log.info("clear run: %d preexisting feed items marked cleared", cleared)
+                    log.info("clear run: %d preexisting feed items skipped", cleared)
         except Exception:
             log.exception("clear run poll failed")
         while True:
@@ -77,64 +87,44 @@ class FeedPoller:
                 added += 1
         return added
 
-    async def ingest_item(self, item, *, clear: bool = False) -> bool:
-        """Fetch full text and persist a new news row. Returns True if a new row was created."""
-        if await repo.news_exists(self._pool, item.source, item.external_id):
+    async def ingest_item(self, item: NewsItem, *, clear: bool = False) -> bool:
+        """Fetch full text and enqueue the item. Returns True if it was new."""
+        key = (item.source, item.external_id)
+        if key in self._seen:
             return False
+        self._seen.add(key)
+        if len(self._seen) > _SEEN_SET_MAX:
+            # keep memory bounded: sets are unordered, so drop everything but the
+            # current key; missed re-ingests are caught by vector dedup and the
+            # daily limit anyway
+            self._seen.clear()
+            self._seen.add(key)
 
         if clear:
-            news_id = await repo.add_news(
-                self._pool,
-                source=item.source,
-                external_id=item.external_id,
-                title=item.title,
-                text=item.summary,
-                url=item.link,
-                full_text_fetched=False,
-                published_at=item.published_at,
-                status=NewsStatus.cleared,
-                log_stage_name="fetch",
-                log_message="present in feed at startup (clear_run), skipped",
-            )
-            log.info("cleared: source=%s news_id=%d title=%r", item.source, news_id, item.title[:80])
+            await repo.counter_increment(self._pool, repo.COUNTER_CLEARED)
+            log.info("cleared: source=%s title=%r", item.source, item.title[:80])
             return True
 
         text, fetched = await self._load_text(item)
         if len(text) < self._cfg.fetcher.min_text_length:
-            await repo.add_news(
-                self._pool,
-                source=item.source,
-                external_id=item.external_id,
-                title=item.title,
-                text=text,
-                url=item.link,
-                full_text_fetched=fetched,
-                published_at=item.published_at,
-                status=NewsStatus.failed,
-                log_stage_name="fetch",
-                log_message=f"text too short ({len(text)} < {self._cfg.fetcher.min_text_length}), skipped",
-            )
+            await repo.counter_increment(self._pool, repo.COUNTER_FAILED)
             log.warning("text too short, skipped: source=%s title=%r", item.source, item.title[:80])
             return True
 
-        news_id = await repo.add_news(
-            self._pool,
+        feed_item = FeedItem(
             source=item.source,
             external_id=item.external_id,
             title=item.title,
             text=text,
             url=item.link,
-            full_text_fetched=fetched,
             published_at=item.published_at,
-            status=NewsStatus.pending,
-            log_stage_name="fetch",
-            log_message="full text fetched" if fetched else "full text fetch failed, using rss summary",
+            full_text_fetched=fetched,
         )
-        self._queue.put_nowait(news_id)
-        log.info("new item queued: source=%s news_id=%d title=%r", item.source, news_id, item.title[:80])
+        self._queue.put_nowait(feed_item)
+        log.info("new item queued: source=%s title=%r", item.source, item.title[:80])
         return True
 
-    async def _load_text(self, item) -> tuple[str, bool]:
+    async def _load_text(self, item: NewsItem) -> tuple[str, bool]:
         fetched_text = await fetch_article(
             self._http,
             item.link,

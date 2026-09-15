@@ -30,7 +30,7 @@ def make_post(post_id: int, text: str, url: str):
             "id": post_id,
             "text": text,
             "tg_url": url,
-            "created_at": dt.datetime(2026, 8, 30, 10, 0, tzinfo=dt.timezone.utc),
+            "published_at": dt.datetime(2026, 8, 30, 10, 0, tzinfo=dt.timezone.utc),
         },
     )()
 

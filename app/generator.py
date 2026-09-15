@@ -7,7 +7,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.config import Settings
-from app.db.entities import Post
 from app.providers.llm import LLMError, LLMProvider
 from app.textutil import sanitize_telegram_html, truncate_html
 
@@ -71,7 +70,7 @@ class PostGenerator:
         self._llm = llm
         self._style_path = style_path
 
-    async def generate(self, news, related: Sequence[Post]) -> PostDraft:
+    async def generate(self, news, related: Sequence) -> PostDraft:
         style = self._load_style()
         system = style + GENERATION_RULES
         user = _build_user_prompt(news, related)
@@ -126,7 +125,7 @@ def _strip_tme_urls(text: str) -> str:
     return re.sub(r"[ \t]{2,}", " ", cleaned)
 
 
-def _build_user_prompt(news, related: Sequence[Post]) -> str:
+def _build_user_prompt(news, related: Sequence) -> str:
     lines = [
         "НОВОСТЬ:",
         f"Заголовок: {news.title}",
@@ -137,7 +136,7 @@ def _build_user_prompt(news, related: Sequence[Post]) -> str:
         lines.append("")
         lines.append("ПРОШЛЫЕ ПОСТЫ КАНАЛА, ПОХОЖИЕ ПО ТЕМЕ:")
         for post in related:
-            lines.append(f"[id={post.id}] ({_fmt_date(post.created_at)})")
+            lines.append(f"[id={post.id}] ({_fmt_date(post.published_at)})")
             lines.append(f"Текст поста: {post.text[:1500]}")
     return "\n".join(lines)
 

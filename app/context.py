@@ -13,3 +13,4 @@ class AppContext:
     pool: object
     publisher: object
     sender: object
+    pipeline: object = None

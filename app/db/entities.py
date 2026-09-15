@@ -1,83 +1,65 @@
 from __future__ import annotations
 
 import datetime as dt
-import enum
-from dataclasses import dataclass
-
-
-class NewsStatus(str, enum.Enum):
-    pending = "pending"
-    dedup = "dedup"
-    photo_search = "photo_search"
-    writing = "writing"
-    queued = "queued"
-    moderation = "moderation"
-    published = "published"
-    duplicate = "duplicate"
-    needs_review = "needs_review"
-    rejected = "rejected"
-    failed = "failed"
-    cleared = "cleared"
-    skipped = "skipped"
-
-
-class PostStatus(str, enum.Enum):
-    draft = "draft"
-    queued = "queued"
-    published = "published"
-    failed = "failed"
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
-class News:
-    id: int
+class FeedItem:
+    """A fetched news item travelling through the pipeline queues."""
+
     source: str
     external_id: str
     title: str
     text: str
     url: str
-    full_text_fetched: bool = False
     published_at: dt.datetime | None = None
-    embedding: list[float] | None = None
-    status: NewsStatus = NewsStatus.pending
-    duplicate_of_id: int | None = None
-    created_at: dt.datetime | None = None
+    full_text_fetched: bool = False
 
 
 @dataclass(slots=True)
-class Post:
+class PublishedPost:
+    """A published channel post, as read from the DB."""
+
     id: int
-    news_id: int
+    source: str
     text: str
     embedding: list[float] | None = None
     tg_message_id: int | None = None
     tg_url: str | None = None
-    status: PostStatus = PostStatus.draft
     published_at: dt.datetime | None = None
-    created_at: dt.datetime | None = None
 
 
 @dataclass(slots=True)
-class PostImage:
-    id: int
-    post_id: int
+class PhotoRecord:
     source_url: str
-    local_path: str | None
-    position: int
+    data: bytes | None = None
 
 
 @dataclass(slots=True)
-class PostReference:
-    id: int
-    post_id: int
-    referenced_post_id: int
+class PublishJob:
+    """A ready post travelling from the pipeline to the publisher."""
+
+    source: str
+    text: str
+    source_url: str = ""
+    photos: list[PhotoRecord] = field(default_factory=list)
+    reply_to_message_id: int | None = None
+    admin_note: str = ""
 
 
 @dataclass(slots=True)
-class LogEntry:
+class DraftJob:
+    """A moderation draft, held in memory only (dies with the process)."""
+
     id: int
-    news_id: int
-    stage: str
-    level: str
-    message: str
-    created_at: dt.datetime | None = None
+    job: PublishJob
+    created_at: dt.datetime
+    admin_chat_id: int | None = None
+    admin_message_id: int | None = None
+
+
+@dataclass(slots=True)
+class Counter:
+    key: str
+    value: int

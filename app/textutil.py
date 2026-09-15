@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import html
 import math
 from collections.abc import Sequence
@@ -212,3 +213,26 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     if na == 0.0 or nb == 0.0:
         return 0.0
     return dot / math.sqrt(na * nb)
+
+
+def ru_plural(value: int, one: str, few: str, many: str) -> str:
+    if value % 10 == 1 and value % 100 != 11:
+        return one
+    if value % 10 in {2, 3, 4} and value % 100 not in {12, 13, 14}:
+        return few
+    return many
+
+
+def humanize_age(delta: dt.timedelta) -> str:
+    """Russian human-readable duration: 'меньше минуты', '45 минут', '2 часа', '3 дня'."""
+    seconds = max(0, int(delta.total_seconds()))
+    if seconds < 60:
+        return "меньше минуты"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} {ru_plural(minutes, 'минуту', 'минуты', 'минут')}"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} {ru_plural(hours, 'час', 'часа', 'часов')}"
+    days = hours // 24
+    return f"{days} {ru_plural(days, 'день', 'дня', 'дней')}"

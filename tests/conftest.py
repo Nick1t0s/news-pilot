@@ -43,7 +43,7 @@ def _env_value(key: str) -> str | None:
 
 TEST_DSN = _env_value("TEST_DSN") or "postgresql+asyncpg://USER:PASSWORD@localhost:5432/DBNAME"
 
-_TRUNCATE = "TRUNCATE processing_log, post_references, post_images, posts, news RESTART IDENTITY CASCADE"
+_TRUNCATE = "TRUNCATE posts, counters RESTART IDENTITY CASCADE"
 
 
 @pytest.fixture
@@ -85,21 +85,19 @@ async def clean_db(pool):
 
 
 @pytest.fixture
-def news_factory(pool):
+def post_factory(pool):
+    """Insert a published post (the only DB-backed entity now)."""
     from app.db import repo
-    from app.db.entities import NewsStatus
+    from tests.mocks import hashed_vector
 
-    async def create(text: str, title: str = "Новость", source: str = "lenta") -> int:
-        return await repo.add_news(
+    async def create(text: str, source: str = "lenta", *, embedding=None) -> int:
+        return await repo.insert_published_post(
             pool,
             source=source,
-            external_id=f"guid-{title}-{text[:20]}",
-            title=title,
             text=text,
-            url="https://example.com/x",
-            full_text_fetched=True,
-            published_at=None,
-            status=NewsStatus.pending,
+            tg_message_id=1,
+            tg_url=None,
+            embedding=embedding if embedding is not None else hashed_vector(text),
         )
 
     return create

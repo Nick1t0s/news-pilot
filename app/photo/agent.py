@@ -8,7 +8,6 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import Settings
-from app.db.entities import News
 from app.photo.downloader import (
     MAX_IMAGE_BYTES,
     download_image,
@@ -116,17 +115,17 @@ class PhotoAgent:
         self._tavily = tavily
         self._http = http
 
-    async def collect(self, news: News) -> list[PhotoRecord]:
+    async def collect(self, item) -> list[PhotoRecord]:
         try:
-            return await self._collect_inner(news)
+            return await self._collect_inner(item)
         except LLMError as exc:
-            log.error("photo agent failed: news_id=%s error=%s", news.id, exc)
+            log.error("photo agent failed: source=%s error=%s", item.source, exc)
             return []
         except Exception:
-            log.exception("photo agent failed: news_id=%s", news.id)
+            log.exception("photo agent failed: source=%s", item.source)
             return []
 
-    async def _collect_inner(self, news: News) -> list[PhotoRecord]:
+    async def _collect_inner(self, item) -> list[PhotoRecord]:
         max_images = self._cfg.photo_agent.max_images
         max_searches = self._cfg.photo_agent.max_searches
         candidates: dict[str, dict] = {}
@@ -138,7 +137,7 @@ class PhotoAgent:
 
         messages: list[dict] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _news_prompt(news, max_searches)},
+            {"role": "user", "content": _news_prompt(item, max_searches)},
         ]
 
         searches_used = 0
@@ -183,10 +182,10 @@ class PhotoAgent:
             if selection is not None:
                 break
         else:
-            log.warning("photo agent hit iteration limit: news_id=%s", news.id)
+            log.warning("photo agent hit iteration limit: source=%s", item.source)
 
         if not selection:
-            log.info("no photos selected: news_id=%s", news.id)
+            log.info("no photos selected: source=%s", item.source)
             return []
 
         records: list[PhotoRecord] = []
@@ -294,11 +293,11 @@ def _prune_inline_images(messages: list[dict], keep: int) -> None:
         messages[index]["content"] = "Изображение было приложено ранее и уже оценено."
 
 
-def _news_prompt(news: News, max_searches: int) -> str:
+def _news_prompt(item, max_searches: int) -> str:
     return "\n".join([
         "Суть новости:",
-        news.title,
-        news.text[:1200],
+        item.title,
+        item.text[:1200],
         "",
         f"Тебе доступно не более {max_searches} поисковых запросов.",
         "Найди фото через tavily_image_search.",

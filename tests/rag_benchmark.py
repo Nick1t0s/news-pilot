@@ -29,7 +29,7 @@ from app.config import (
 from app.context_search import ContextSearch
 from app.db import repo
 from app.db.base import _schema_ddl, create_pool
-from app.db.entities import News, NewsStatus, PostStatus
+from app.db.entities import FeedItem
 from app.providers.embeddings import EmbeddingError, EmbeddingProvider
 from app.providers.retry import with_retries
 
@@ -185,9 +185,8 @@ class ThreadedEmbedding(EmbeddingProvider):
 
 async def reset_schema(pool, dims: int) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(
-            "DROP TABLE IF EXISTS processing_log, post_references, post_images, posts, news CASCADE"
-        )
+        await conn.execute("DROP TABLE IF EXISTS counters CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS posts CASCADE")
     ddl = _schema_ddl(dims)
     if dims > 2000:
         ddl = "\n".join(line for line in ddl.splitlines() if "USING hnsw" not in line)
@@ -239,20 +238,13 @@ async def run_model(model: str, dims: int, instruct: bool) -> dict:
             if not checked:
                 await warn_if_cpu_offload(http, model)
                 checked = True
-            news_id = await repo.add_news(
+            post_id = await repo.insert_published_post(
                 pool,
-                source="bench",
-                external_id=f"{topic}-{i}",
-                title=text[:80],
+                source=f"bench-{topic}",
                 text=text,
-                url="https://example.invalid/" + topic,
-                full_text_fetched=True,
-                published_at=None,
-                status=NewsStatus.published,
-            )
-            post_id = await repo.insert_post(pool, news_id, text, PostStatus.published)
-            await repo.update_post_published(
-                pool, post_id, tg_message_id=0, tg_url=None, embedding=emb
+                tg_message_id=0,
+                tg_url=None,
+                embedding=emb,
             )
             post_ids[post_id] = topic
             corpus_embeddings[post_id] = emb
@@ -264,16 +256,14 @@ async def run_model(model: str, dims: int, instruct: bool) -> dict:
         started = time.perf_counter()
         emb = await timing.embed(body)
         query_seconds = time.perf_counter() - started
-        news = News(
-            id=0,
+        news = FeedItem(
             source="bench",
             external_id="q",
             title=title,
             text=text,
             url="https://example.invalid/q",
-            embedding=emb,
         )
-        hits = await search.find(news)
+        hits = await search.find(news, embedding=emb)
         production = [post_ids[h.id] for h in hits]
         sims = {pid: cosine(emb, cemb) for pid, cemb in corpus_embeddings.items()}
         ranked = sorted(sims.items(), key=lambda kv: kv[1], reverse=True)

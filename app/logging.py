@@ -2,27 +2,13 @@ from __future__ import annotations
 
 import logging
 import sys
-from contextvars import ContextVar
-
-news_id_var: ContextVar = ContextVar("news_id", default=None)
-
-
-def set_news_id(value: int | None) -> None:
-    news_id_var.set(value)
-
-
-def get_news_id() -> int | None:
-    return news_id_var.get()
 
 
 class ConsoleFormatter(logging.Formatter):
-    """`LOGGER: message [news_id=N]` — human-readable single-line format."""
+    """`LOGGER: message` — human-readable single-line format."""
 
     def format(self, record: logging.LogRecord) -> str:
         line = f"{record.name.upper()}: {record.getMessage()}"
-        news_id = news_id_var.get()
-        if news_id is not None:
-            line += f" [news_id={news_id}]"
         if record.exc_info:
             line += "\n" + self.formatException(record.exc_info)
         return line

@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
+from app.db.entities import FeedItem
 from app.photo.agent import PhotoAgent
 from tests.mocks import FakeLLM, completion, tool_call
 
 
 def make_news(news_id: int = 1):
-    return SimpleNamespace(
-        id=news_id,
+    return FeedItem(
+        source="lenta",
+        external_id=f"guid-{news_id}",
         title="БПЛА атаковали автомобиль",
         text="В Шебекино беспилотник ударил по автомобилю, пострадал мужчина.",
+        url="https://example.com/news",
     )
 
 
@@ -112,12 +113,7 @@ async def test_search_limit_is_respected() -> None:
 
 async def test_rss_images_are_not_passed_to_agent() -> None:
     """Regression: agent must always search via tavily, never receive article images."""
-    news = SimpleNamespace(
-        id=1,
-        title="БПЛА атаковали автомобиль",
-        text="В Шебекино беспилотник ударил по автомобилю, пострадал мужчина.",
-        rss_image_urls=["https://example.com/from-article.jpg"],
-    )
+    news = make_news()  # FeedItem carries no image URLs by design
     llm = FakeLLM()
     llm.push_chat(completion(None, [tool_call("t1", "select_images", {"ids": []})]))
     tavily = make_tavily(results=[])
