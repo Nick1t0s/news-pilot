@@ -15,6 +15,8 @@ class FeedItem:
     url: str
     published_at: dt.datetime | None = None
     full_text_fetched: bool = False
+    # filled by the dedup gate, reused by context search
+    embedding: list[float] | None = None
 
 
 @dataclass(slots=True)

@@ -41,7 +41,8 @@ def _admin_router(cfg: Settings) -> Router:
             queued_count=ctx.publisher.queued_count(),
             drafts_count=ctx.publisher.drafts_count(),
             processing_queued=pipeline.queued_count() if pipeline else 0,
-            processing_active=pipeline.in_flight_count() if pipeline else 0,
+            processing_active=pipeline.dedup_active() if pipeline else 0,
+            selection_queued=pipeline.selection_queued() if pipeline else 0,
         )
         await message.answer(text)
 

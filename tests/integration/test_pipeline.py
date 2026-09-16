@@ -26,6 +26,7 @@ from app.dedup import DedupService
 from app.generator import PostDraft
 from app.photo.agent import PhotoRecord
 from app.pipeline.processor import Pipeline
+from app.pipeline.selection import NewsSelector
 from app.providers.llm import LLMError
 from app.publish.service import PublishService
 from app.rss.parse import NewsItem
@@ -42,10 +43,9 @@ METRO_REPHRASED = (
     "Для пассажиров обещана экономия до двадцати минут, стоимость составила 150 млрд рублей."
 )
 
-UNIQUE_VERDICT = {
-    "is_duplicate": False, "reason": "unique", "duplicate_of_id": None,
-    "should_publish": True, "publish_reason": "important",
-}
+# covers both the dedup verdict and the batch selection call in the default case
+UNIQUE_VERDICT = {"is_duplicate": False, "reason": "уникальна"}
+DEFAULT_VERDICT = {"is_duplicate": False, "reason": "уникальна", "selected_index": 1}
 
 
 def make_settings() -> Settings:
@@ -57,7 +57,7 @@ def make_settings() -> Settings:
         fetcher=FetcherConfig(timeout_seconds=5, retries=1, min_text_length=100),
         tavily=TavilyConfig(api_key=""),
         telegram=TelegramConfig(bot_token="000:TEST", channel_id="@testchannel", admin_id=42),
-        dedup=DedupConfig(min_similarity=0.35, on_error="review"),
+        dedup=DedupConfig(min_similarity=0.35, on_error="pass"),
         photo_agent=PhotoAgentConfig(),
         context=ContextConfig(min_similarity=0.35),
         publish=PublishConfig(mode="auto", moderation_timeout_hours=24),
@@ -91,14 +91,23 @@ class StubGenerator:
         ])
 
 
+class FailingSelector:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def select(self, batch):
+        raise self._exc
+
+
 class Bundle:
     def __init__(self, settings: Settings, pool) -> None:
         self.settings = settings
         self.pool = pool
-        self.llm = FakeLLM(default_json=dict(UNIQUE_VERDICT))
+        self.llm = FakeLLM(default_json=dict(DEFAULT_VERDICT))
         self.sender = FakeSender()
         self.embeddings = FakeEmbeddings()
         self.dedup = DedupService(settings, pool, self.llm, self.embeddings)
+        self.selection = NewsSelector(pool, self.llm)
         self.photo = StubPhotoAgent()
         self.generator = StubGenerator()
         self.context = ContextSearch(settings, pool, self.embeddings)
@@ -106,13 +115,19 @@ class Bundle:
         self.queue: asyncio.Queue[FeedItem] = asyncio.Queue()
         self.pipeline = Pipeline(
             settings, pool, self.queue,
-            self.dedup, self.photo, self.context, self.generator, self.publisher,
+            self.dedup, self.selection, self.photo, self.context, self.generator, self.publisher,
         )
         self.poller = FeedPoller(settings, None, pool, self.queue)
 
     async def ingest(self, item: NewsItem) -> FeedItem:
         assert await self.poller.ingest_item(item) is True
         return await self.queue.get()
+
+    async def gate(self, item: NewsItem) -> FeedItem:
+        """Ingest + dedup stage; unique items land in the selection queue."""
+        feed_item = await self.ingest(item)
+        await self.pipeline.dedup_one(feed_item)
+        return feed_item
 
     async def drain(self) -> None:
         while not self.publisher.queue.empty():
@@ -140,7 +155,16 @@ def patch_fetch(monkeypatch, text: str) -> None:
     monkeypatch.setattr("app.rss.poller.fetch_article", fake_fetch)
 
 
-async def test_pipeline_processes_items_concurrently(settings, pool, monkeypatch) -> None:
+def metro_news(external_id: str, title: str = "Метро открыто") -> NewsItem:
+    from app.rss.parse import NewsItem
+
+    return NewsItem(
+        source="lenta", external_id=external_id, title=title,
+        summary="s", link=f"https://example.com/{external_id}",
+    )
+
+
+async def test_dedup_processes_items_concurrently(settings, pool, monkeypatch) -> None:
     settings.pipeline.concurrency = 2
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
@@ -148,38 +172,36 @@ async def test_pipeline_processes_items_concurrently(settings, pool, monkeypatch
     active = 0
     max_active = 0
 
-    class SlowGenerator(StubGenerator):
-        async def generate(self, item, related) -> PostDraft:
+    class SlowDedup:
+        def __init__(self, inner) -> None:
+            self.inner = inner
+
+        async def process(self, item):
             nonlocal active, max_active
             active += 1
             max_active = max(max_active, active)
             await asyncio.sleep(0.05)
             try:
-                return await super().generate(item, related)
+                return await self.inner.process(item)
             finally:
                 active -= 1
 
-    box.generator = SlowGenerator()
-    box.pipeline._generator = box.generator  # pipeline keeps its own reference
+    box.pipeline._dedup = SlowDedup(box.dedup)
 
     runner = asyncio.create_task(box.pipeline.run())
     try:
         for index in range(4):
-            item = NewsItem(
-                source="lenta", external_id=f"guid-conc-{index}", title=f"Метро открыто {index}",
-                summary="s", link=f"https://example.com/conc-{index}",
-            )
-            await box.poller.ingest_item(item)
+            await box.poller.ingest_item(metro_news(f"guid-conc-{index}", f"Метро открыто {index}"))
         await asyncio.wait_for(box.queue.join(), timeout=10.0)
     finally:
         runner.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await runner
 
-    assert max_active <= 2, "semaphore must cap concurrency"
-    assert max_active > 1, "news must be processed in parallel"
-    # all four items passed the gate and landed in the publish queue
-    assert box.publisher.queued_count() == 4
+    assert max_active <= 2, "semaphore must cap dedup concurrency"
+    assert max_active > 1, "dedup must run items in parallel"
+    # all four unique items landed in the selection queue
+    assert box.pipeline.selection_queued() == 4
 
 
 async def test_full_pipeline_auto_publish(settings, pool, monkeypatch) -> None:
@@ -196,7 +218,10 @@ async def test_full_pipeline_auto_publish(settings, pool, monkeypatch) -> None:
     feed_item = await box.queue.get()
     assert feed_item.full_text_fetched is True
     assert feed_item.text == METRO_TEXT
-    await box.pipeline.process(feed_item)
+    await box.pipeline.dedup_one(feed_item)
+    assert box.pipeline.selection_queued() == 1
+    assert feed_item.embedding is not None  # computed once, reused by context search
+    await box.pipeline.select_once()
     await box.drain()
 
     posts = await box.all_posts()
@@ -214,17 +239,15 @@ async def test_full_pipeline_duplicate(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
 
-    first = await box.ingest(NewsItem(source="lenta", external_id="guid-a", title="Метро открыто", summary="s", link="https://example.com/a"))
-    await box.pipeline.process(first)
+    await box.gate(NewsItem(source="lenta", external_id="guid-a", title="Метро открыто", summary="s", link="https://example.com/a"))
+    await box.pipeline.select_once()
     await box.drain()
-    first_post = (await box.all_posts())[0]
 
-    patch_fetch(monkeypatch, METRO_REPHRASED)
-    second = await box.ingest(NewsItem(source="lenta", external_id="guid-b", title="Линию метро ввели в эксплуатацию", summary="s2", link="https://example.com/b"))
-    box.llm.push_json({"is_duplicate": True, "reason": "та же новость", "duplicate_of_id": first_post.id})
-    await box.pipeline.process(second)
+    box.llm.push_json({"is_duplicate": True, "reason": "та же новость"})
+    await box.gate(NewsItem(source="lenta", external_id="guid-b", title="Линию метро ввели в эксплуатацию", summary="s2", link="https://example.com/b"))
 
     assert await box.counter(repo.COUNTER_DUPLICATES) == 1
+    assert box.pipeline.selection_queued() == 0
     assert len(box.sender.published) == 1
     assert len(await box.all_posts()) == 1
 
@@ -233,20 +256,19 @@ async def test_full_pipeline_developing_story(settings, pool, monkeypatch) -> No
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
 
-    first = await box.ingest(NewsItem(source="lenta", external_id="guid-a", title="Метро открыто", summary="s", link="https://example.com/a"))
     box.generator.draft = PostDraft(text=METRO_TEXT, reference_ids=[])
-    await box.pipeline.process(first)
+    await box.gate(NewsItem(source="lenta", external_id="guid-a", title="Метро открыто", summary="s", link="https://example.com/a"))
+    await box.pipeline.select_once()
     await box.drain()
     first_post = (await box.all_posts())[0]
 
-    patch_fetch(monkeypatch, METRO_REPHRASED)
-    second = await box.ingest(NewsItem(source="lenta", external_id="guid-c", title="Линию метро ввели в эксплуатацию", summary="s2", link="https://example.com/c"))
-    box.llm.push_json({"is_duplicate": False, "reason": "продолжение истории", "duplicate_of_id": None})
     box.generator.draft = PostDraft(
         text="Поток пассажиров растёт, добавили ещё один состав",
         reference_ids=[int(first_post.id)],
     )
-    await box.pipeline.process(second)
+    box.llm.push_json({"is_duplicate": False, "reason": "продолжение истории", "selected_index": 1})
+    await box.gate(NewsItem(source="lenta", external_id="guid-c", title="Линию метро ввели в эксплуатацию", summary="s2", link="https://example.com/c"))
+    await box.pipeline.select_once()
     await box.drain()
 
     posts = await box.all_posts()
@@ -261,8 +283,8 @@ async def test_moderation_mode_draft_flow(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
 
-    item = await box.ingest(NewsItem(source="lenta", external_id="guid-m", title="Метро открыто", summary="s", link="https://example.com/m"))
-    await box.pipeline.process(item)
+    await box.gate(NewsItem(source="lenta", external_id="guid-m", title="Метро открыто", summary="s", link="https://example.com/m"))
+    await box.pipeline.select_once()
 
     assert box.publisher.drafts_count() == 1
     assert box.publisher.queued_count() == 0
@@ -285,8 +307,8 @@ async def test_moderation_reject(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
 
-    item = await box.ingest(NewsItem(source="lenta", external_id="guid-mr", title="Метро открыто", summary="s", link="https://example.com/mr"))
-    await box.pipeline.process(item)
+    await box.gate(NewsItem(source="lenta", external_id="guid-mr", title="Метро открыто", summary="s", link="https://example.com/mr"))
+    await box.pipeline.select_once()
     draft_id = next(iter(box.publisher._drafts))
 
     await box.publisher.reject_draft(draft_id, "rejected by admin")
@@ -314,40 +336,40 @@ async def test_photo_failure_does_not_block(settings, pool, monkeypatch) -> None
     box.photo.fail = True
     box.generator.draft = PostDraft(text="пост без фото", reference_ids=[])
 
-    item = await box.ingest(NewsItem(source="lenta", external_id="guid-p", title="Метро открыто", summary="s", link="https://example.com/p"))
-    await box.pipeline.process(item)
+    await box.gate(NewsItem(source="lenta", external_id="guid-p", title="Метро открыто", summary="s", link="https://example.com/p"))
+    await box.pipeline.select_once()
     await box.drain()
 
     assert len(box.sender.published) == 1
     assert box.sender.published[0]["photos"] == []
 
 
-async def test_pipeline_retry_recovers(settings, pool, monkeypatch) -> None:
+async def test_writing_retry_recovers(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
     box.generator.fail_times = 1
     box.generator.draft = PostDraft(text="пост после ретрая", reference_ids=[])
 
-    item = await box.ingest(NewsItem(source="lenta", external_id="guid-r1", title="Метро открыто", summary="s", link="https://example.com/r1"))
-    await box.pipeline.process(item)
+    await box.gate(NewsItem(source="lenta", external_id="guid-r1", title="Метро открыто", summary="s", link="https://example.com/r1"))
+    await box.pipeline.select_once()
     await box.drain()
 
     assert box.generator.calls == 2
-    assert box.queue.empty()
+    assert box.pipeline.selection_queued() == 0
     assert len(await box.all_posts()) == 1
     assert await box.counter(repo.COUNTER_FAILED) == 0
 
 
-async def test_pipeline_retry_exhausted(settings, pool, monkeypatch) -> None:
+async def test_writing_retry_exhausted(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
     box.generator.fail_times = 99
 
-    item = await box.ingest(NewsItem(source="lenta", external_id="guid-r2", title="Метро открыто", summary="s", link="https://example.com/r2"))
-    await box.pipeline.process(item)
+    await box.gate(NewsItem(source="lenta", external_id="guid-r2", title="Метро открыто", summary="s", link="https://example.com/r2"))
+    await box.pipeline.select_once()
 
     assert box.generator.calls == 2
-    assert box.queue.empty()
+    assert box.pipeline.selection_queued() == 0
     assert await box.all_posts() == []
     assert await box.counter(repo.COUNTER_FAILED) == 1
 
@@ -358,8 +380,8 @@ async def test_photo_selection_reaches_sender(settings, pool, monkeypatch) -> No
     box.photo.photos = [PhotoRecord(source_url="https://example.com/img1.jpg", data=b"\xff\xd8\xffstub")]
     box.generator.draft = PostDraft(text="пост с фото", reference_ids=[])
 
-    item = await box.ingest(NewsItem(source="lenta", external_id="guid-i", title="Метро открыто", summary="s", link="https://example.com/i"))
-    await box.pipeline.process(item)
+    await box.gate(NewsItem(source="lenta", external_id="guid-i", title="Метро открыто", summary="s", link="https://example.com/i"))
+    await box.pipeline.select_once()
     await box.drain()
 
     assert len(box.sender.published) == 1
@@ -395,8 +417,8 @@ async def test_stats_matches_db(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
 
-    item = await box.ingest(NewsItem(source="lenta", external_id="guid-st", title="Метро", summary="s", link="https://example.com/st"))
-    await box.pipeline.process(item)
+    await box.gate(NewsItem(source="lenta", external_id="guid-st", title="Метро", summary="s", link="https://example.com/st"))
+    await box.pipeline.select_once()
     await box.drain()
 
     text = await build_stats_text(pool, settings, queued_count=0, drafts_count=0)
@@ -405,36 +427,41 @@ async def test_stats_matches_db(settings, pool, monkeypatch) -> None:
     assert "lenta — 1" in text
 
 
-async def test_stats_shows_processing_queue(settings, pool, monkeypatch) -> None:
+async def test_stats_shows_queues(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
-    await box.poller.ingest_item(NewsItem(source="lenta", external_id="pq-1", title="Т", summary="s", link="https://example.com/pq-1"))
-    await box.poller.ingest_item(NewsItem(source="lenta", external_id="pq-2", title="Т2", summary="s", link="https://example.com/pq-2"))
+    await box.poller.ingest_item(metro_news("pq-1", "Т"))
+    await box.poller.ingest_item(metro_news("pq-2", "Т2"))
 
     assert box.pipeline.queued_count() == 2
-    assert box.pipeline.in_flight_count() == 0
+    assert box.pipeline.dedup_active() == 0
+    assert box.pipeline.selection_queued() == 0
     text = await build_stats_text(
         pool, settings,
         queued_count=0, drafts_count=0,
         processing_queued=box.pipeline.queued_count(),
-        processing_active=box.pipeline.in_flight_count(),
+        processing_active=box.pipeline.dedup_active(),
+        selection_queued=box.pipeline.selection_queued(),
     )
-    assert "📥 Ожидают обработки: 2" in text
-    assert "⚙️ В работе: 0" in text
-    # conftest settings keep the default limit (daily_posts=50): nothing published yet
-    assert "Осталось постов на сегодня: 50 из 50" in text
+    assert "📥 Ожидают дедупа: 2" in text
+    assert "⚙️ В дедупе: 0" in text
+    assert "⏳ Ждут отбора: 0" in text
+    assert "Осталось постов" not in text
 
 
-async def test_stats_shows_daily_remaining(settings, pool, monkeypatch) -> None:
+async def test_stats_shows_selection_queue(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
-    settings.limits.daily_posts = 5
     box = Bundle(settings, pool)
-    item = await box.ingest(NewsItem(source="lenta", external_id="rem-1", title="Метро", summary="s", link="https://example.com/rem-1"))
-    await box.pipeline.process(item)
-    await box.drain()
+    await box.gate(metro_news("sq-1", "Первая"))
+    await box.gate(metro_news("sq-2", "Вторая"))
 
-    text = await build_stats_text(pool, settings, queued_count=0, drafts_count=0)
-    assert "Осталось постов на сегодня: 4 из 5" in text
+    assert box.pipeline.selection_queued() == 2
+    text = await build_stats_text(
+        pool, settings,
+        queued_count=0, drafts_count=0,
+        selection_queued=box.pipeline.selection_queued(),
+    )
+    assert "⏳ Ждут отбора: 2" in text
 
 
 def dt_utc(*args):
@@ -471,65 +498,81 @@ async def test_normal_ingest_after_clear_run(settings, pool, monkeypatch) -> Non
     assert queue.empty()
 
 
-async def test_daily_limit_skips_news_without_llm(settings, pool, monkeypatch) -> None:
-    settings.limits.daily_posts = 1
+async def test_batch_selection_picks_one_and_discards_rest(settings, pool, monkeypatch) -> None:
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
-    box.llm.push_json(dict(UNIQUE_VERDICT))
+    for index in range(3):
+        await box.gate(metro_news(f"guid-sel-{index}", f"Метро {index}"))
+    assert box.pipeline.selection_queued() == 3
 
-    first = await box.ingest(NewsItem(source="lenta", external_id="guid-lim-1", title="Метро открыто", summary="s", link="https://example.com/lim-1"))
-    await box.pipeline.process(first)
-    await box.drain()
-    assert len(await box.all_posts()) == 1
-    assert len(box.llm.json_calls) == 1
-
-    second = await box.ingest(NewsItem(source="lenta", external_id="guid-lim-2", title="Футбол", summary="s", link="https://example.com/lim-2"))
-    await box.pipeline.process(second)
-
-    assert await box.counter(repo.COUNTER_LIMIT_SKIPPED) == 1
-    assert len(box.llm.json_calls) == 1
-    assert len(await box.all_posts()) == 1
-
-
-async def test_importance_gate_skips_news(settings, pool, monkeypatch) -> None:
-    settings.limits.daily_posts = 5
-    patch_fetch(monkeypatch, METRO_TEXT)
-    box = Bundle(settings, pool)
-    box.llm.push_json({"is_duplicate": False, "reason": "уникальна", "duplicate_of_id": None, "should_publish": False, "publish_reason": "рутинная новость"})
-
-    item = await box.ingest(NewsItem(source="lenta", external_id="guid-skip-1", title="Метро открыто", summary="s", link="https://example.com/skip-1"))
-    await box.pipeline.process(item)
-
-    assert await box.counter(repo.COUNTER_SKIPPED_UNIMPORTANT) == 1
-    assert await box.all_posts() == []
-    assert box.generator.calls == 0
-
-
-async def test_no_limit_when_daily_posts_zero(settings, pool, monkeypatch) -> None:
-    settings.limits.daily_posts = 0
-    patch_fetch(monkeypatch, METRO_TEXT)
-    box = Bundle(settings, pool)
-
-    item = await box.ingest(NewsItem(source="lenta", external_id="guid-nolim", title="Метро открыто", summary="s", link="https://example.com/nolim"))
-    await box.pipeline.process(item)
+    box.llm.push_json({"selected_index": 2, "reason": "самая значимая"})
+    chosen = await box.pipeline.select_once()
     await box.drain()
 
+    assert chosen is not None
     assert len(box.sender.published) == 1
-    assert len(await box.all_posts()) == 1
+    assert await box.counter(repo.COUNTER_NOT_SELECTED) == 2
+    assert await box.counter(repo.COUNTER_DUPLICATES) == 0
+    assert box.pipeline.selection_queued() == 0
+
+
+async def test_batch_selection_null_discards_all(settings, pool, monkeypatch) -> None:
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+    for index in range(3):
+        await box.gate(metro_news(f"guid-null-{index}", f"Метро {index}"))
+
+    box.llm.push_json({"selected_index": None, "reason": "все рутинные"})
+    chosen = await box.pipeline.select_once()
+
+    assert chosen is None
+    assert box.generator.calls == 0
+    assert await box.counter(repo.COUNTER_NOT_SELECTED) == 3
+    assert await box.all_posts() == []
+
+
+async def test_selection_error_requeues_batch(settings, pool, monkeypatch) -> None:
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+    for index in range(3):
+        await box.gate(metro_news(f"guid-rq-{index}", f"Метро {index}"))
+
+    box.pipeline._selection = FailingSelector(LLMError("llm down"))
+    chosen = await box.pipeline.select_once()
+
+    assert chosen is None
+    assert box.pipeline.selection_queued() == 3
+    assert await box.counter(repo.COUNTER_NOT_SELECTED) == 0
+    assert await box.counter(repo.COUNTER_FAILED) == 0
+
+
+async def test_selection_single_item_goes_through_model(settings, pool, monkeypatch) -> None:
+    patch_fetch(monkeypatch, METRO_TEXT)
+    box = Bundle(settings, pool)
+    await box.gate(metro_news("guid-single", "Метро открыто"))
+
+    box.llm.push_json({"selected_index": None, "reason": "не достойна"})
+    chosen = await box.pipeline.select_once()
+
+    # the model was called even for a single item and decided not to publish it
+    assert any(call["name"] == "news_selection" for call in box.llm.json_calls)
+    assert chosen is None
+    assert await box.counter(repo.COUNTER_NOT_SELECTED) == 1
+    assert len(await box.all_posts()) == 0
 
 
 async def test_only_published_posts_are_dedup_candidates(settings, pool, monkeypatch) -> None:
-    """Skipped items vanish entirely: they are not candidates next time."""
+    """Discarded (not selected) items vanish: they are not candidates next time."""
     patch_fetch(monkeypatch, METRO_TEXT)
     box = Bundle(settings, pool)
-    box.llm.push_json({"is_duplicate": False, "reason": "уникальна", "duplicate_of_id": None, "should_publish": False, "publish_reason": "неважная"})
+    box.llm.push_json(dict(UNIQUE_VERDICT))
+    box.llm.push_json({"selected_index": None, "reason": "неважная"})
 
-    first = await box.ingest(NewsItem(source="lenta", external_id="guid-sk1", title="Метро открыто", summary="s", link="https://example.com/sk1"))
-    await box.pipeline.process(first)
-    assert await box.counter(repo.COUNTER_SKIPPED_UNIMPORTANT) == 1
+    await box.gate(NewsItem(source="lenta", external_id="guid-sk1", title="Метро открыто", summary="s", link="https://example.com/sk1"))
+    await box.pipeline.select_once()
+    assert await box.counter(repo.COUNTER_NOT_SELECTED) == 1
 
-    patch_fetch(monkeypatch, METRO_REPHRASED)
-    second = await box.ingest(NewsItem(source="lenta", external_id="guid-sk2", title="Линию метро ввели", summary="s2", link="https://example.com/sk2"))
-    # no candidates (nothing published) -> still asks the gate; unique verdict default
-    await box.pipeline.process(second)
+    box.llm.push_json(dict(UNIQUE_VERDICT))
+    await box.gate(NewsItem(source="lenta", external_id="guid-sk2", title="Линию метро ввели", summary="s2", link="https://example.com/sk2"))
+    # no candidates (nothing published) -> the gate still runs
     assert "кандидатов нет" in box.llm.json_calls[-1]["user"]

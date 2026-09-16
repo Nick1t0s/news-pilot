@@ -11,8 +11,7 @@ _POST_COLUMNS = "id, source, text, embedding, tg_message_id, tg_url, published_a
 
 # Well-known counter keys (any other key works too — counters is a free-form key/value table).
 COUNTER_DUPLICATES = "duplicates"
-COUNTER_SKIPPED_UNIMPORTANT = "skipped_unimportant"
-COUNTER_LIMIT_SKIPPED = "limit_skipped"
+COUNTER_NOT_SELECTED = "not_selected"
 COUNTER_REJECTED = "rejected"
 COUNTER_FAILED = "failed"
 COUNTER_CLEARED = "cleared"
@@ -78,13 +77,6 @@ async def nearest_posts(
             cutoff, _vec(embedding), limit,
         )
     return [_post(row) for row in rows]
-
-
-async def count_published_posts_since(pool: asyncpg.Pool, since: dt.datetime) -> int:
-    async with pool.acquire() as conn:
-        return int(await conn.fetchval(
-            "SELECT COUNT(*) FROM posts WHERE published_at >= $1", since,
-        ))
 
 
 async def last_published_post_at(pool: asyncpg.Pool) -> dt.datetime | None:

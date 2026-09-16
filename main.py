@@ -21,6 +21,7 @@ from app.logging import setup_logging
 from app.photo.agent import PhotoAgent
 from app.photo.tavily_client import TavilyImageSearch
 from app.pipeline.processor import Pipeline
+from app.pipeline.selection import NewsSelector
 from app.providers.embeddings import EmbeddingProvider
 from app.providers.llm import LLMProvider
 from app.publish.sender import TelegramSender
@@ -84,7 +85,8 @@ async def run() -> None:
     publisher = PublishService(cfg, pool, sender, embeddings, http_publish)
 
     queue: asyncio.Queue = asyncio.Queue()
-    pipeline = Pipeline(cfg, pool, queue, dedup, photo_agent, context_search, generator, publisher)
+    selection = NewsSelector(pool, llm)
+    pipeline = Pipeline(cfg, pool, queue, dedup, selection, photo_agent, context_search, generator, publisher)
     poller = FeedPoller(cfg, http, pool, queue)
 
     dp = build_dispatcher(cfg)
@@ -97,7 +99,8 @@ async def run() -> None:
 
     tasks = [
         asyncio.create_task(poller.run_forever(), name="poller"),
-        asyncio.create_task(pipeline.run(), name="pipeline"),
+        asyncio.create_task(pipeline.run(), name="pipeline-dedup"),
+        asyncio.create_task(pipeline.run_selection(), name="pipeline-selection"),
         asyncio.create_task(publisher.run_queue_worker(), name="publish-queue"),
         asyncio.create_task(publisher.run_moderation_watch(), name="moderation-watch"),
         asyncio.create_task(dp.start_polling(bot, handle_signals=False), name="telegram"),

@@ -4,7 +4,6 @@ import asyncio
 import datetime as dt
 import logging
 import time
-from zoneinfo import ZoneInfo
 
 import asyncpg
 
@@ -29,10 +28,18 @@ def _duration_note(seconds: float) -> str:
 
 
 class Pipeline:
-    """News processing: dedup/importance gate -> photo -> writing -> publish queue.
+    """Two-stage news processing.
 
-    Each item is processed in its own asyncio task; parallelism is capped
-    by `pipeline.concurrency` (semaphore), so a slow item never blocks others.
+    Stage 1 (the only parallel stage): dedup workers — one asyncio task per
+    item, capped by `pipeline.concurrency`. Each item gets an embedding and
+    one LLM duplicate check; unique items (with the embedding attached) go
+    into the second, in-memory queue.
+
+    Stage 2 (serial): every `pipeline.batch_interval_seconds` that queue is
+    drained to zero; the whole batch goes into one LLM call that picks exactly
+    one item (the losers are discarded for good), and the winner goes through
+    photo -> context search -> generation -> publisher queue, one at a time.
+
     Items live only in memory: there are no statuses in the DB, outcomes are
     either a PublishJob in the publisher queue or a counter increment.
     """
@@ -43,6 +50,7 @@ class Pipeline:
         pool: asyncpg.Pool,
         queue: asyncio.Queue[FeedItem],
         dedup,
+        selection,
         photo_agent,
         context_search,
         generator,
@@ -51,7 +59,9 @@ class Pipeline:
         self._cfg = cfg
         self._pool = pool
         self._queue = queue
+        self._unique_queue: asyncio.Queue[FeedItem] = asyncio.Queue()
         self._dedup = dedup
+        self._selection = selection
         self._photo = photo_agent
         self._context = context_search
         self._generator = generator
@@ -60,24 +70,28 @@ class Pipeline:
         self._tasks: set[asyncio.Task] = set()
 
     def queued_count(self) -> int:
-        """Items waiting in the queue (not yet picked up)."""
+        """Items waiting in the dedup queue (not yet picked up)."""
         return self._queue.qsize()
 
-    def in_flight_count(self) -> int:
-        """Items picked up for processing (including those waiting for a semaphore slot)."""
+    def dedup_active(self) -> int:
+        """Items currently in the dedup stage (including semaphore waiters)."""
         return len(self._tasks)
 
+    def selection_queued(self) -> int:
+        """Unique items waiting for the next batch selection."""
+        return self._unique_queue.qsize()
+
     async def run(self) -> None:
-        """Concurrent loop: spawns a task per item, bounded by the semaphore."""
+        """Dedup loop: spawns a task per item, bounded by the semaphore."""
         log.info(
-            "pipeline loop started (concurrency=%d)",
+            "dedup loop started (concurrency=%d)",
             max(1, self._cfg.pipeline.concurrency),
         )
         try:
             while True:
                 item = await self._queue.get()
                 task = asyncio.create_task(
-                    self._process_guarded(item), name=f"pipeline-item-{item.external_id[:40]}"
+                    self._dedup_guarded(item), name=f"pipeline-dedup-{item.external_id[:40]}"
                 )
                 self._tasks.add(task)
                 task.add_done_callback(self._tasks.discard)
@@ -85,50 +99,78 @@ class Pipeline:
             # run() only ends on cancellation (shutdown): stop in-flight items too
             await self._drain_tasks()
 
-    async def _process_guarded(self, item: FeedItem) -> None:
-        try:
-            async with self._semaphore:
-                await self.process(item)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("pipeline task crashed: title=%r", item.title[:80])
-            await self._fail(item, "unhandled pipeline task crash")
-        finally:
-            self._queue.task_done()
+    async def run_selection(self) -> None:
+        """Serial loop: once per interval, drain the unique queue, pick one, write it."""
+        interval = max(1, self._cfg.pipeline.batch_interval_seconds)
+        log.info("selection loop started (interval=%ds)", interval)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self.select_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("selection cycle failed")
 
-    async def _drain_tasks(self) -> None:
-        if not self._tasks:
+    async def dedup_one(self, item: FeedItem) -> None:
+        """Run one item through the dedup gate: duplicate -> counter, unique -> selection queue."""
+        verdict, embedding = await self._dedup.process(item)
+        item.embedding = embedding or None
+        log.info("stage=dedup verdict=%s (%s)", verdict.kind, verdict.reason)
+        if verdict.kind != "unique":
+            await self._apply_verdict(verdict)
             return
-        tasks = list(self._tasks)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        self._tasks.clear()
+        self._unique_queue.put_nowait(item)
 
-    async def process(self, item: FeedItem) -> None:
+    async def select_once(self) -> FeedItem | None:
+        """One selection cycle: drain the unique queue, let the model pick one,
+        write the winner. Returns the chosen item (or None)."""
+        batch = self._drain_unique()
+        if not batch:
+            return None
+        started = time.monotonic()
+        try:
+            chosen = await self._selection.select(batch)
+        except Exception as exc:  # noqa: BLE001
+            # unusable verdict: give the batch back, retry on the next tick
+            log.error("selection failed, re-queuing batch (%d items): %s", len(batch), exc)
+            for item in batch:
+                self._unique_queue.put_nowait(item)
+            return None
+        for item in batch:
+            if item is not chosen:
+                await self._increment(repo.COUNTER_NOT_SELECTED)
+        if chosen is None:
+            log.info(
+                "selection: nothing worth publishing (batch=%d in %.1fs)",
+                len(batch), time.monotonic() - started,
+            )
+            return None
+        log.info(
+            "selection done: batch=%d discarded=%d title=%r in %.1fs",
+            len(batch), len(batch) - 1, _short_title(chosen), time.monotonic() - started,
+        )
+        await self.write_one(chosen)
+        return chosen
+
+    async def write_one(self, item: FeedItem) -> None:
+        """Serial writing stage: photo -> context -> generation -> publish queue,
+        with `pipeline.retries` attempts before the item is marked failed."""
         started = time.monotonic()
         max_retries = self._cfg.pipeline.retries
         for attempt in range(1, max_retries + 2):
             if attempt > 1:
-                log.info("processing retry (attempt %d/%d): title=%r", attempt, max_retries + 1, _short_title(item))
+                log.info("writing retry (attempt %d/%d): title=%r", attempt, max_retries + 1, _short_title(item))
             try:
-                verdict, embedding = await self._run_gate(item)
-                if verdict.kind != "unique":
-                    await self._apply_verdict(verdict)
-                    log.info(
-                        "processing finished: result=%s in %.1fs", verdict.kind, time.monotonic() - started
-                    )
-                    return
                 photos = await self._run_photo(item)
-                await self._run_writing_and_publish(item, embedding, photos, time.monotonic() - started)
-                log.info("processing finished: result=published in %.1fs", time.monotonic() - started)
+                await self._run_writing_and_publish(item, photos, time.monotonic() - started)
+                log.info("writing finished: published in %.1fs", time.monotonic() - started)
                 return
             except Exception as exc:
                 if isinstance(exc, (LLMError, EmbeddingError)):
-                    log.error("pipeline stage failed: %s", exc)
+                    log.error("writing stage failed: %s", exc)
                 else:
-                    log.exception("pipeline stage failed")
+                    log.exception("writing stage failed")
                 if attempt > max_retries:
                     await self._fail(item, f"{type(exc).__name__}: {exc}")
                     return
@@ -137,45 +179,23 @@ class Pipeline:
                     attempt + 1, max_retries + 1, _short_title(item), f"{type(exc).__name__}: {exc}",
                 )
 
+    def _drain_unique(self) -> list[FeedItem]:
+        items: list[FeedItem] = []
+        while True:
+            try:
+                items.append(self._unique_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                return items
+
     async def _apply_verdict(self, verdict: DedupVerdict) -> None:
         if verdict.kind == "duplicate":
             counter = repo.COUNTER_DUPLICATES
-        elif verdict.kind == "skipped":
-            counter = repo.COUNTER_SKIPPED_UNIMPORTANT
-        elif verdict.kind == "needs_review":
-            counter = None
-        else:  # dropped
+        else:  # dropped (dedup.on_error=drop)
             counter = repo.COUNTER_FAILED
-        if counter is not None:
-            await self._increment(counter)
-
-    async def _run_gate(self, item: FeedItem) -> tuple[DedupVerdict, list[float]]:
-        if await self._daily_limit_reached():
-            await self._increment(repo.COUNTER_LIMIT_SKIPPED)
-            log.info("stage=gate skipped: daily post limit reached")
-            return DedupVerdict("skipped", reason="daily post limit reached"), []
-        verdict, embedding = await self._dedup.process(item)
-        log.info("stage=gate verdict=%s (%s)", verdict.kind, verdict.reason)
-        return verdict, embedding
+        await self._increment(counter)
 
     async def _increment(self, key: str) -> None:
         await repo.counter_increment(self._pool, key)
-
-    async def _daily_limit_reached(self) -> bool:
-        daily_posts = self._cfg.limits.daily_posts
-        if daily_posts <= 0:
-            return False
-        tz = ZoneInfo(self._cfg.limits.timezone)
-        now = dt.datetime.now(tz)
-        since = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        published = await repo.count_published_posts_since(self._pool, since)
-        if published >= daily_posts:
-            log.info(
-                "daily limit reached: %d/%d posts published today (%s)",
-                published, daily_posts, self._cfg.limits.timezone,
-            )
-            return True
-        return False
 
     async def _run_photo(self, item: FeedItem) -> list:
         stage = time.monotonic()
@@ -187,11 +207,9 @@ class Pipeline:
         log.info("stage=photo found=%d in %.1fs", len(photos), time.monotonic() - stage)
         return photos
 
-    async def _run_writing_and_publish(
-        self, item: FeedItem, embedding: list[float], photos: list, elapsed: float
-    ) -> None:
+    async def _run_writing_and_publish(self, item: FeedItem, photos: list, elapsed: float) -> None:
         stage = time.monotonic()
-        related = await self._context.find(item, embedding)
+        related = await self._context.find(item, item.embedding)
         draft = await self._generator.generate(item, related)
         reply_to = self._resolve_reply_target(related, draft.reference_ids)
         job = PublishJob(
@@ -224,3 +242,24 @@ class Pipeline:
         except Exception:
             log.exception("failed to increment counter %s", repo.COUNTER_FAILED)
         log.error("item failed: title=%r error=%s", _short_title(item), message)
+
+    async def _dedup_guarded(self, item: FeedItem) -> None:
+        try:
+            async with self._semaphore:
+                await self.dedup_one(item)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("dedup task crashed: title=%r", item.title[:80])
+            await self._fail(item, "unhandled dedup task crash")
+        finally:
+            self._queue.task_done()
+
+    async def _drain_tasks(self) -> None:
+        if not self._tasks:
+            return
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()

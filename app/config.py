@@ -89,7 +89,8 @@ class DedupConfig(ExtraForbid):
     window_days: int = 3
     min_similarity: float = 0.75
     top_k: int = 5
-    on_error: Literal["review", "pass", "drop"] = "review"
+    # pass = treat as unique on LLM error, drop = discard the item
+    on_error: Literal["pass", "drop"] = "pass"
 
 
 class PhotoAgentConfig(ExtraForbid):
@@ -108,10 +109,18 @@ class ContextConfig(ExtraForbid):
 class PipelineConfig(ExtraForbid):
     retries: int = 2
     concurrency: int = 8
+    batch_interval_seconds: int = 1800
 
     @field_validator("concurrency")
     @classmethod
     def _positive_concurrency(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("must be >= 1")
+        return value
+
+    @field_validator("batch_interval_seconds")
+    @classmethod
+    def _positive_interval(cls, value: int) -> int:
         if value < 1:
             raise ValueError("must be >= 1")
         return value
@@ -123,19 +132,6 @@ class PublishConfig(ExtraForbid):
     notify_admin: bool = False
     append_source: bool = False
     proxy: str = ""
-
-
-class LimitsConfig(ExtraForbid):
-    daily_posts: int = 0  # 0 = no hard limit, counter not queried
-    reserve_posts: int = 5
-    timezone: str = "Europe/Moscow"
-
-    @field_validator("daily_posts", "reserve_posts")
-    @classmethod
-    def _non_negative(cls, value: int) -> int:
-        if value < 0:
-            raise ValueError("must be >= 0")
-        return value
 
 
 class Settings(BaseSettings):
@@ -161,7 +157,6 @@ class Settings(BaseSettings):
     context: ContextConfig = Field(default_factory=ContextConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
-    limits: LimitsConfig = Field(default_factory=LimitsConfig)
 
     @classmethod
     def settings_customise_sources(

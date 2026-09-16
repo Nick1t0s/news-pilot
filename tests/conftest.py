@@ -57,7 +57,7 @@ def settings() -> Settings:
         fetcher=FetcherConfig(timeout_seconds=5, retries=1, min_text_length=100),
         tavily=TavilyConfig(api_key="", timeout_seconds=5, retries=2),
         telegram=TelegramConfig(bot_token="000000:TEST", channel_id="@testchannel", admin_id=42),
-        dedup=DedupConfig(window_days=3, min_similarity=0.35, top_k=5, on_error="review"),
+        dedup=DedupConfig(window_days=3, min_similarity=0.35, top_k=5, on_error="pass"),
         photo_agent=PhotoAgentConfig(max_iterations=5, max_searches=3, max_images=4),
         context=ContextConfig(window_days=14, top_k=3, min_similarity=0.35),
         pipeline=PipelineConfig(retries=1),
