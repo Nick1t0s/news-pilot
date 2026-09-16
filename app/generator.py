@@ -12,9 +12,6 @@ from app.textutil import sanitize_telegram_html, truncate_html
 
 log = logging.getLogger("generator")
 
-MAX_POST_LENGTH = 1000
-MIN_POST_LENGTH = 200
-
 _TME_URL_RE = re.compile(r"https?://(?:t\.me|telegram\.me)/[^\s)]*", re.IGNORECASE)
 _EMPTY_PARENS_RE = re.compile(r"\(\s*\)")
 
@@ -29,7 +26,7 @@ GENERATION_RULES = """
 - Напиши пост в стиле канала (см. стайл-гайд), а не пересказ источника.
 - Используй только факты из приведённой новости. Ничего не выдумывай и не добавляй детали, которых нет в тексте.
 - Разметка — HTML Telegram: разрешены <b>, <i>, <u>, <s>, <code>, <pre>. Заголовки, списки и любые ссылки запрещены.
-- Длина текста не более 1000 символов (лимит caption при фото).
+- Длина текста не более {max_length} символов (лимит caption при фото).
 - Если найденные прошлые посты канала посвящены развитию этой же истории — это продолжение темы: включи id прошлого
   поста в references_post_ids (бот отправит пост ответом на прошлый). Ссылку в тексте НЕ вставляй.
 - В посте-продолжении рассказывай только о новых фактах (то, чего не было в прошлом посте). Не повторяй уже
@@ -67,12 +64,14 @@ class PostDraft:
 class PostGenerator:
     def __init__(self, cfg: Settings, llm: LLMProvider, style_path) -> None:
         self._cfg = cfg
+        self._max_length = cfg.generator.max_length
+        self._min_length = cfg.generator.min_length
         self._llm = llm
         self._style_path = style_path
 
     async def generate(self, news, related: Sequence) -> PostDraft:
         style = self._load_style()
-        system = style + GENERATION_RULES
+        system = style + GENERATION_RULES.replace("{max_length}", str(self._max_length))
         user = _build_user_prompt(news, related)
         data = await self._llm.complete_json(
             system=system,
@@ -84,29 +83,29 @@ class PostGenerator:
         text = sanitize_telegram_html(_strip_tme_urls(str(data.get("text") or "")))
         if not text:
             raise LLMError("generator returned empty post text")
-        if len(text) > MAX_POST_LENGTH:
+        if len(text) > self._max_length:
             text = await self._shorten(system, user, text)
         allowed_ids = {post.id for post in related}
         reference_ids = [int(pid) for pid in data.get("references_post_ids") or [] if int(pid) in allowed_ids]
         return PostDraft(text=text, reference_ids=reference_ids)
 
     async def _shorten(self, system: str, user: str, original_text: str) -> str:
-        log.warning("generated post exceeds %d chars, asking llm to shorten", MAX_POST_LENGTH)
+        log.warning("generated post exceeds %d chars, asking llm to shorten", self._max_length)
         try:
             data = await self._llm.complete_json(
                 system=system,
-                user=user + f"\n\nВНИМАНИЕ: предыдущий ответ был длиннее {MAX_POST_LENGTH} символов. "
-                f"Сократи текст до {MAX_POST_LENGTH} символов или меньше, сохранив смысл и разметку.",
+                user=user + f"\n\nВНИМАНИЕ: предыдущий ответ был длиннее {self._max_length} символов. "
+                f"Сократи текст до {self._max_length} символов или меньше, сохранив смысл и разметку.",
                 schema=REFERENCES_SCHEMA,
                 schema_name="channel_post",
                 temperature=0.2,
             )
             text = sanitize_telegram_html(_strip_tme_urls(str(data.get("text") or "")))
-            if MIN_POST_LENGTH <= len(text) <= MAX_POST_LENGTH:
+            if self._min_length <= len(text) <= self._max_length:
                 return text
         except LLMError:
             pass
-        return truncate_html(original_text, MAX_POST_LENGTH)
+        return truncate_html(original_text, self._max_length)
 
     def _load_style(self) -> str:
         try:

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -31,6 +31,17 @@ class LLMConfig(ExtraForbid):
     reasoning_effort: str = ""
     # Raw passthrough merged into the request body (e.g. GLM-style thinking: {"type": "disabled"})
     extra_body: dict[str, Any] = Field(default_factory=dict)
+
+
+class GeneratorConfig(ExtraForbid):
+    max_length: int = 1000
+    min_length: int = 200
+
+    @model_validator(mode="after")
+    def _min_below_max(self) -> "GeneratorConfig":
+        if self.min_length >= self.max_length:
+            raise ValueError("min_length must be less than max_length")
+        return self
 
 
 class EmbeddingsConfig(ExtraForbid):
@@ -146,6 +157,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    generator: GeneratorConfig = Field(default_factory=GeneratorConfig)
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
     rss: RssConfig = Field(default_factory=RssConfig)
     fetcher: FetcherConfig = Field(default_factory=FetcherConfig)

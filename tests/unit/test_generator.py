@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from app.generator import MAX_POST_LENGTH, PostGenerator
+from app.config import GeneratorConfig
+from app.generator import PostGenerator
 from tests.mocks import FakeLLM
 
 STYLE = "Ты — админ канала. Пишем живо."
@@ -51,12 +52,13 @@ async def test_generate_basic(tmp_path) -> None:
     assert "Новость о мосте" in call["user"]
 
 
-def make_cfg():
+def make_cfg(generator: GeneratorConfig | None = None):
     from app.config import ContextConfig, LLMConfig, Settings
 
     return Settings(
         _env_file=None,
         llm=LLMConfig(temperature=0.3, retries=2),
+        generator=generator or GeneratorConfig(),
         context=ContextConfig(),
     )
 
@@ -109,7 +111,7 @@ async def test_generate_shortens_long_text(tmp_path) -> None:
 
     draft = await generator.generate(make_news(), related=[])
 
-    assert len(draft.text) <= MAX_POST_LENGTH
+    assert len(draft.text) <= GeneratorConfig().max_length
     assert draft.text == ("Короткий пост про мост " * 12).strip()
     assert len(llm.json_calls) == 2
 
@@ -125,9 +127,26 @@ async def test_generate_shorten_rejects_too_short_text(tmp_path) -> None:
 
     draft = await generator.generate(make_news(), related=[])
 
-    assert 0 < len(draft.text) <= MAX_POST_LENGTH
+    assert 0 < len(draft.text) <= GeneratorConfig().max_length
     assert "мусор" not in draft.text
     assert draft.text.startswith("Осмысленный текст новости.")
+
+
+async def test_generate_respects_custom_max_length(tmp_path) -> None:
+    style_file = tmp_path / "style.md"
+    style_file.write_text(STYLE, encoding="utf-8")
+    cfg = make_cfg(GeneratorConfig(max_length=50, min_length=10))
+    llm = FakeLLM()
+    llm.push_json({"text": "длинный текст про мост " * 10, "references_post_ids": []})
+    llm.push_json({"text": "Короткий пост про мост", "references_post_ids": []})
+    generator = PostGenerator(cfg, llm, style_file)
+
+    draft = await generator.generate(make_news(), related=[])
+
+    assert draft.text == "Короткий пост про мост"
+    assert len(draft.text) <= 50
+    assert "не более 50 символов" in llm.json_calls[0]["system"]
+    assert "длиннее 50 символов" in llm.json_calls[1]["user"]
 
 
 async def test_generate_without_style_file(tmp_path) -> None:
