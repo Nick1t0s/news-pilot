@@ -6,8 +6,8 @@
 log_level: INFO
 
 llm:                                  # генерация текста постов, вердикты дедупликации, фото-агент
-  base_url: "https://api.openai.com/v1"      # OpenAI-compatible endpoint
-  model: "gpt-4o-mini"                       # vision-capable (нужны vision и tool-calling)
+  base_url: "https://polza.ai/api/v1"        # OpenAI-compatible endpoint
+  model: "glm-5.3-flash"                     # vision-capable (нужны vision и tool-calling)
   temperature: 0.4                           # «творческость» генерации (0 = строго, 1 = свободно)
   timeout_seconds: 120                       # таймаут одного запроса к LLM
   retries: 3                                 # ретраев при ошибке/таймауте (с backoff)
@@ -20,7 +20,7 @@ llm:                                  # генерация текста пост
   # api_key: задаётся в .env (LLM__API_KEY)
 
 generator:                            # лимиты длины текста поста
-  max_length: 1000                          # максимум символов (лимит caption Telegram при фото ~1024 — выше поднимать нельзя)
+  max_length: 500                           # максимум символов (лимит caption Telegram при фото ~1024 — выше поднимать нельзя)
   min_length: 200                           # минимум при пересжатии: короче — текст обрезается принудительно
 
 embeddings:                           # эмбеддинги для дедупа и поиска связанных постов (Ollama)
@@ -31,15 +31,17 @@ embeddings:                           # эмбеддинги для дедупа
   # proxy: "socks5://user:pass@host:1080"    # прокси для доступа к Ollama (пусто = напрямую)
 
 rss:                                  # сбор новостей из RSS-лент
-  poll_interval_seconds: 300                 # интервал опроса всех фидов (сек)
-  clear_run: false                           # при запуске всё, что уже в лентах, помечается cleared и не публикуется
+  poll_interval_seconds: 120                 # интервал опроса всех фидов (сек)
+  clear_run: true                            # при запуске всё, что уже в лентах, помечается cleared и не публикуется
   feeds:                                     # список лент: name — короткое имя источника (видно в админке), url — адрес RSS
     - name: "lenta"
       url: "https://lenta.ru/rss"
     - name: "ria"
       url: "https://ria.ru/export/rss2/index.xml"
-    - name: "tass"
-      url: "https://tass.ru/rss/v2.xml"
+    - name: "ria_world"
+      url: "https://ria.ru/export/rss2/archive/index.xml"
+#    - name: "tass"
+#      url: "https://tass.ru/rss/v2.xml"
     - name: "interfax"
       url: "https://www.interfax.ru/rss.asp"
     - name: "kommersant"
@@ -69,8 +71,8 @@ tavily:                               # поиск фото-кандидатов
 
 telegram:                             # бот и канал
   # bot_token: задаётся в .env (TELEGRAM__BOT_TOKEN)
-  channel_id: "@channel"                     # канал публикации: @username или числовой id -100... (бот должен быть админом)
-  admin_id: 123456                           # Telegram user id админа: модерация, уведомления, /admin
+  channel_id: -1004491415188                 # канал публикации: @username или числовой id -100... (бот должен быть админом)
+  admin_id: 7882141240                       # Telegram user id админа: модерация, уведомления, /admin
   # proxy: "socks5://user:pass@host:1080"    # прокси для Telegram Bot API (полезно из РФ, пусто = напрямую)
 
 dedup:                                # отсев дубликатов: векторный поиск + LLM-вердикт (только «дубликат/не дубликат»)
@@ -82,7 +84,7 @@ dedup:                                # отсев дубликатов: век�
 photo_agent:                          # подбор фото (tavily-поиск + vision-оценка)
   max_iterations: 10                         # максимум шагов tool-calling-цикла
   max_searches: 5                            # максимум поисковых запросов tavily на новость
-  max_images: 4                              # максимум фото в посте (1–4)
+  max_images: 2                              # максимум фото в посте (1–4)
   # proxy: "socks5://user:pass@host:1080"    # прокси для скачивания фото (пусто = напрямую)
 
 context:                              # поиск связанных прошлых постов канала («как мы писали ранее»)
@@ -96,8 +98,8 @@ pipeline:                             # дедуп-воркеры, интерв�
   retries: 2                                 # ретраев фазы записи (фото/контекст/генерация/публикация) после первой попытки
 
 publish:                              # публикация в канал
-  mode: moderation                           # auto — сразу в канал; moderation — черновик админу с кнопками
+  mode: auto                                 # auto — сразу в канал; moderation — черновик админу с кнопками
   moderation_timeout_hours: 24               # в режиме moderation: неотвеченный черновик отклоняется через N часов
-  notify_admin: false                        # в режиме auto: уведомлять админа о каждой публикации (ссылка, время, источник)
+  notify_admin: true                         # в режиме auto: уведомлять админа о каждой публикации (ссылка, время, источник)
   append_source: false                       # добавлять в конец поста ссылку «Источник» на исходную новость
   # proxy: "socks5://user:pass@host:1080"    # прокси для докачки фото при повторной публикации (пусто = напрямую)
