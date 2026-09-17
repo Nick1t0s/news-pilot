@@ -109,7 +109,7 @@ TEST_DSN=postgresql+asyncpg://мой_юзер:мой_пароль@localhost:5432
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3-embedding:0.6b-q4_K_M   # модель по умолчанию: 1024 dims, ~1 ГБ RAM
+ollama pull qwen3-embedding:0.6b   # модель по умолчанию: 1024 dims, ~1 ГБ RAM
 ```
 
 #### Запуск
@@ -211,7 +211,7 @@ journalctl -u news-pilot -f    # логи
 | `generator` | `max_length` | `1000` | максимум символов в посте (лимит caption Telegram при фото ~1024 — выше не поднимать) |
 | | `min_length` | `200` | минимум при пересжатии: короче — текст обрезается принудительно |
 | `embeddings` | `base_url` | `http://localhost:11434` | Ollama |
-| | `model` | `qwen3-embedding:0.6b-q4_K_M` | |
+| | `model` | `qwen3-embedding:0.6b` | |
 | | `dimensions` | `1024` | зашита в схему БД; смена = пересоздать базу |
 | | `max_chars` | `6000` | сколько символов текста подавать на эмбеддинг |
 | | `proxy` | *(пусто)* | |
@@ -421,4 +421,5 @@ tests/                  unit + integration
 | Посты не приходят в канал | бот не админ канала или нет права публикации; проверить `channel_id` |
 | `cleared` сразу после старта | это `rss.clear_run: true` — старые записи пропускаются сознательно |
 | 403 при скачивании фото | часть CDN требует браузерные заголовки (уже зашиты в `main.py`); поможет `photo_agent.proxy` |
-| Эмбеддинги падают | Ollama не запущена или модель не скачана (`ollama pull qwen3-embedding:0.6b-q4_K_M`) |
+| Эмбеддинги падают | Ollama не запущена или модель не скачана (`ollama pull qwen3-embedding:0.6b`) |
+| `llama-server process no longer running` / внезапные 400 от `/api/embed` | OOM-killer убил llama-server: слишком много параллельных embed'ов для серверной RAM. Поставьте в compose для ollama `OLLAMA_NUM_PARALLEL: "1"`, `OLLAMA_CONTEXT_LENGTH: "2048"`, `OLLAMA_KEEP_ALIVE: "-1"` и уменьшите `pipeline.concurrency` (4) и `embeddings.max_chars` (3000); проверить: `dmesg -T \| grep -i oom` |

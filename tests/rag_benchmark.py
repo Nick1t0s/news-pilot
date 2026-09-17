@@ -36,7 +36,7 @@ from app.providers.retry import with_retries
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DB_DSN = os.environ.get("TEST_DSN", "postgresql+asyncpg://USER:PASSWORD@localhost:5432/DBNAME")
 MODELS = {
-    "qwen3-embedding:0.6b-q4_K_M": 1024,
+    "qwen3-embedding:0.6b": 1024,
     "qwen3-embedding:4b-q4_K_M": 2560,
     "qwen3-embedding:8b-q4_K_M": 4096,
 }
