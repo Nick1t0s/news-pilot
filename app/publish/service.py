@@ -98,9 +98,22 @@ class PublishService:
         return photos
 
     async def _text_with_source(self, job: PublishJob) -> str:
-        if not self._cfg.publish.append_source or not job.source_url:
-            return job.text
-        return f'{job.text}\n\n🔗 <a href="{html.escape(job.source_url, quote=True)}">Источник</a>'
+        text = job.text
+        if self._cfg.publish.append_source and job.source_url:
+            text += f'\n\n🔗 <a href="{html.escape(job.source_url, quote=True)}">Источник</a>'
+        footer = self._publish_footer()
+        if footer:
+            text += footer
+        return text
+
+    def _publish_footer(self) -> str:
+        cfg = self._cfg.publish
+        if not (cfg.footer_text and cfg.footer_label and cfg.footer_url):
+            return ""
+        return (
+            f'\n\n{html.escape(cfg.footer_text, quote=False)} '
+            f'<a href="{html.escape(cfg.footer_url, quote=True)}">{html.escape(cfg.footer_label, quote=False)}</a>'
+        )
 
     async def _notify_admin_published(self, job: PublishJob, link: int | str) -> None:
         try:

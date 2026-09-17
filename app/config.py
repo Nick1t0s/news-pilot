@@ -38,7 +38,7 @@ class GeneratorConfig(ExtraForbid):
     min_length: int = 200
 
     @model_validator(mode="after")
-    def _min_below_max(self) -> "GeneratorConfig":
+    def _min_below_max(self) -> GeneratorConfig:
         if self.min_length >= self.max_length:
             raise ValueError("min_length must be less than max_length")
         return self
@@ -46,7 +46,7 @@ class GeneratorConfig(ExtraForbid):
 
 class EmbeddingsConfig(ExtraForbid):
     base_url: str = "http://localhost:11434"
-    model: str = "qwen3-embedding:0.6b-q4_K_M"
+    model: str = "qwen3-embedding:0.6b"
     dimensions: int = 1024
     max_chars: int = 6000
     timeout_seconds: float = 60.0
@@ -142,6 +142,9 @@ class PublishConfig(ExtraForbid):
     moderation_timeout_hours: float = 24.0
     notify_admin: bool = False
     append_source: bool = False
+    footer_text: str = ""
+    footer_label: str = ""
+    footer_url: str = ""
     proxy: str = ""
 
 

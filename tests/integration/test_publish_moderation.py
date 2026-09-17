@@ -140,6 +140,47 @@ async def test_append_source_disabled_keeps_text(settings, pool) -> None:
     assert sender.published[-1]["text"] == "Текст поста"
 
 
+async def test_footer_appends_subscribe_link(settings, pool) -> None:
+    settings.publish.footer_text = "👉 Подпишись на"
+    settings.publish.footer_label = "Info+"
+    settings.publish.footer_url = "https://t.me/news_info_plus"
+    service, sender = make_service(settings, pool)
+    job = make_job(text="Текст поста")
+
+    await service._publish(job, id(job))
+
+    assert (
+        sender.published[-1]["text"]
+        == 'Текст поста\n\n👉 Подпишись на <a href="https://t.me/news_info_plus">Info+</a>'
+    )
+
+
+async def test_footer_html_is_escaped(settings, pool) -> None:
+    settings.publish.footer_text = "Подписывайся <b>"
+    settings.publish.footer_label = "Info+ & News"
+    settings.publish.footer_url = "https://t.me/x?a=1&b=2"
+    service, sender = make_service(settings, pool)
+    job = make_job(text="Текст")
+
+    await service._publish(job, id(job))
+
+    assert (
+        sender.published[-1]["text"]
+        == 'Текст\n\nПодписывайся &lt;b&gt; <a href="https://t.me/x?a=1&amp;b=2">Info+ &amp; News</a>'
+    )
+
+
+async def test_footer_ignored_when_empty(settings, pool) -> None:
+    settings.publish.footer_text = "👉 Подпишись на"
+    settings.publish.footer_label = "Info+"
+    service, sender = make_service(settings, pool)
+    job = make_job(text="Текст")
+
+    await service._publish(job, id(job))
+
+    assert sender.published[-1]["text"] == "Текст"
+
+
 async def test_published_post_is_stored_with_source(settings, pool) -> None:
     service, _ = make_service(settings, pool)
     job = make_job(source="ria", text="Текст поста про мост")
