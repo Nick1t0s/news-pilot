@@ -13,6 +13,7 @@ from aiogram.types import (
     BufferedInputFile,
     InlineKeyboardMarkup,
     InputMediaPhoto,
+    LinkPreviewOptions,
     Message,
     ReplyParameters,
 )
@@ -60,7 +61,9 @@ class TelegramSender:
         if photos:
             message_id = await self._send_with_photos(self._channel, text, photos, reply_parameters=reply_parameters)
         else:
-            message = await self._send_text(self._channel, text, reply_parameters=reply_parameters)
+            message = await self._send_text(
+                self._channel, text, reply_parameters=reply_parameters, disable_preview=True,
+            )
             message_id = message.message_id
         return message_id, self.tg_url(message_id)
 
@@ -91,20 +94,18 @@ class TelegramSender:
 
     async def _send_text(
         self, chat_id, text: str, keyboard: InlineKeyboardMarkup | None = None,
-        reply_parameters: ReplyParameters | None = None,
+        reply_parameters: ReplyParameters | None = None, disable_preview: bool = False,
     ) -> Message:
+        kwargs: dict = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "reply_markup": keyboard,
+                        "reply_parameters": reply_parameters}
+        if disable_preview:
+            kwargs["link_preview_options"] = LinkPreviewOptions(is_disabled=True)
         try:
-            return await self._call(
-                self._bot.send_message, chat_id=chat_id, text=text, parse_mode="HTML",
-                reply_markup=keyboard, reply_parameters=reply_parameters,
-            )
+            return await self._call(self._bot.send_message, **kwargs)
         except TelegramBadRequest as exc:
             if "parse" not in str(exc).lower():
                 raise
-            return await self._call(
-                self._bot.send_message, chat_id=chat_id, text=text,
-                reply_markup=keyboard, reply_parameters=reply_parameters,
-            )
+            return await self._call(self._bot.send_message, **{**kwargs, "parse_mode": None})
 
     async def _send_with_photos(
         self, chat_id, caption: str, photos: list[tuple[str, bytes]],
